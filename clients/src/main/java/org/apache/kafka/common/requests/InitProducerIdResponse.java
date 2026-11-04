@@ -19,28 +19,27 @@ package org.apache.kafka.common.requests;
 import org.apache.kafka.common.message.InitProducerIdResponseData;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
-import org.apache.kafka.common.protocol.types.Struct;
+import org.apache.kafka.common.protocol.Readable;
 
-import java.nio.ByteBuffer;
 import java.util.Map;
 
 /**
  * Possible error codes:
- * - {@link Errors#NOT_COORDINATOR}
- * - {@link Errors#COORDINATOR_NOT_AVAILABLE}
- * - {@link Errors#COORDINATOR_LOAD_IN_PROGRESS}
- * - {@link Errors#TRANSACTIONAL_ID_AUTHORIZATION_FAILED}
- * - {@link Errors#CLUSTER_AUTHORIZATION_FAILED}
+ *
+ *   - {@link Errors#NOT_COORDINATOR}
+ *   - {@link Errors#COORDINATOR_NOT_AVAILABLE}
+ *   - {@link Errors#COORDINATOR_LOAD_IN_PROGRESS}
+ *   - {@link Errors#TRANSACTIONAL_ID_AUTHORIZATION_FAILED}
+ *   - {@link Errors#CLUSTER_AUTHORIZATION_FAILED}
+ *   - {@link Errors#INVALID_PRODUCER_EPOCH} // for version <=3
+ *   - {@link Errors#PRODUCER_FENCED}
  */
 public class InitProducerIdResponse extends AbstractResponse {
-    public final InitProducerIdResponseData data;
+    private final InitProducerIdResponseData data;
 
     public InitProducerIdResponse(InitProducerIdResponseData data) {
+        super(ApiKeys.INIT_PRODUCER_ID);
         this.data = data;
-    }
-
-    public InitProducerIdResponse(Struct struct, short version) {
-        this.data = new InitProducerIdResponseData(struct, version);
     }
 
     @Override
@@ -49,17 +48,22 @@ public class InitProducerIdResponse extends AbstractResponse {
     }
 
     @Override
+    public void maybeSetThrottleTimeMs(int throttleTimeMs) {
+        data.setThrottleTimeMs(throttleTimeMs);
+    }
+
+    @Override
     public Map<Errors, Integer> errorCounts() {
         return errorCounts(Errors.forCode(data.errorCode()));
     }
 
     @Override
-    protected Struct toStruct(short version) {
-        return data.toStruct(version);
+    public InitProducerIdResponseData data() {
+        return data;
     }
 
-    public static InitProducerIdResponse parse(ByteBuffer buffer, short version) {
-        return new InitProducerIdResponse(ApiKeys.INIT_PRODUCER_ID.parseResponse(version, buffer), version);
+    public static InitProducerIdResponse parse(Readable readable, short version) {
+        return new InitProducerIdResponse(new InitProducerIdResponseData(readable, version));
     }
 
     @Override
@@ -71,8 +75,4 @@ public class InitProducerIdResponse extends AbstractResponse {
         return Errors.forCode(data.errorCode());
     }
 
-    @Override
-    public boolean shouldClientThrottle(short version) {
-        return version >= 1;
-    }
 }

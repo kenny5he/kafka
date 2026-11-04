@@ -17,16 +17,15 @@
 
 package org.apache.kafka.common.feature;
 
+import org.junit.jupiter.api.Test;
+
 import java.util.Map;
 
-import org.junit.Test;
-
-import static org.apache.kafka.common.utils.Utils.mkEntry;
-import static org.apache.kafka.common.utils.Utils.mkMap;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for the SupportedVersionRange class.
@@ -35,18 +34,18 @@ import static org.junit.Assert.assertTrue;
 public class SupportedVersionRangeTest {
     @Test
     public void testFailDueToInvalidParams() {
-        // min and max can't be < 1.
+        // min and max can't be < 0.
         assertThrows(
             IllegalArgumentException.class,
-            () -> new SupportedVersionRange((short) 0, (short) 0));
-        // min can't be < 1.
+            () -> new SupportedVersionRange((short) -1, (short) -1));
+        // min can't be < 0.
         assertThrows(
             IllegalArgumentException.class,
-            () -> new SupportedVersionRange((short) 0, (short) 1));
-        // max can't be < 1.
+            () -> new SupportedVersionRange((short) -1, (short) 0));
+        // max can't be < 0.
         assertThrows(
             IllegalArgumentException.class,
-            () -> new SupportedVersionRange((short) 1, (short) 0));
+            () -> new SupportedVersionRange((short) 0, (short) -1));
         // min can't be > max.
         assertThrows(
             IllegalArgumentException.class,
@@ -61,7 +60,7 @@ public class SupportedVersionRangeTest {
 
         Map<String, Short> versionRangeMap = versionRange.toMap();
         assertEquals(
-            mkMap(mkEntry("min_version", versionRange.min()), mkEntry("max_version", versionRange.max())),
+            Map.of("min_version", versionRange.min(), "max_version", versionRange.max()),
             versionRangeMap);
 
         SupportedVersionRange newVersionRange = SupportedVersionRange.fromMap(versionRangeMap);
@@ -72,44 +71,44 @@ public class SupportedVersionRangeTest {
 
     @Test
     public void testFromMapFailure() {
-        // min_version can't be < 1.
+        // min_version can't be < 0.
         Map<String, Short> invalidWithBadMinVersion =
-            mkMap(mkEntry("min_version", (short) 0), mkEntry("max_version", (short) 1));
+            Map.of("min_version", (short) -1, "max_version", (short) 0);
         assertThrows(
             IllegalArgumentException.class,
             () -> SupportedVersionRange.fromMap(invalidWithBadMinVersion));
 
-        // max_version can't be < 1.
+        // max_version can't be < 0.
         Map<String, Short> invalidWithBadMaxVersion =
-            mkMap(mkEntry("min_version", (short) 1), mkEntry("max_version", (short) 0));
+            Map.of("min_version", (short) 0, "max_version", (short) -1);
         assertThrows(
             IllegalArgumentException.class,
             () -> SupportedVersionRange.fromMap(invalidWithBadMaxVersion));
 
-        // min_version and max_version can't be < 1.
+        // min_version and max_version can't be < 0.
         Map<String, Short> invalidWithBadMinMaxVersion =
-            mkMap(mkEntry("min_version", (short) 0), mkEntry("max_version", (short) 0));
+            Map.of("min_version", (short) -1, "max_version", (short) -1);
         assertThrows(
             IllegalArgumentException.class,
             () -> SupportedVersionRange.fromMap(invalidWithBadMinMaxVersion));
 
         // min_version can't be > max_version.
         Map<String, Short> invalidWithLowerMaxVersion =
-            mkMap(mkEntry("min_version", (short) 2), mkEntry("max_version", (short) 1));
+            Map.of("min_version", (short) 2, "max_version", (short) 1);
         assertThrows(
             IllegalArgumentException.class,
             () -> SupportedVersionRange.fromMap(invalidWithLowerMaxVersion));
 
         // min_version key missing.
         Map<String, Short> invalidWithMinKeyMissing =
-            mkMap(mkEntry("max_version", (short) 1));
+            Map.of("max_version", (short) 1);
         assertThrows(
             IllegalArgumentException.class,
             () -> SupportedVersionRange.fromMap(invalidWithMinKeyMissing));
 
         // max_version key missing.
         Map<String, Short> invalidWithMaxKeyMissing =
-            mkMap(mkEntry("min_version", (short) 1));
+            Map.of("min_version", (short) 1);
         assertThrows(
             IllegalArgumentException.class,
             () -> SupportedVersionRange.fromMap(invalidWithMaxKeyMissing));
@@ -128,9 +127,9 @@ public class SupportedVersionRangeTest {
     @Test
     public void testEquals() {
         SupportedVersionRange tested = new SupportedVersionRange((short) 1, (short) 1);
-        assertTrue(tested.equals(tested));
-        assertFalse(tested.equals(new SupportedVersionRange((short) 1, (short) 2)));
-        assertFalse(tested.equals(null));
+        assertEquals(tested, tested);
+        assertNotEquals(new SupportedVersionRange((short) 1, (short) 2), tested);
+        assertNotEquals(null, tested);
     }
 
     @Test
@@ -138,5 +137,16 @@ public class SupportedVersionRangeTest {
         SupportedVersionRange versionRange = new SupportedVersionRange((short) 1, (short) 2);
         assertEquals(1, versionRange.min());
         assertEquals(2, versionRange.max());
+    }
+
+    @Test
+    public void testIsIncompatibleWith() {
+        assertFalse(new SupportedVersionRange((short) 1, (short) 1).isIncompatibleWith((short) 1));
+        assertFalse(new SupportedVersionRange((short) 1, (short) 4).isIncompatibleWith((short) 2));
+        assertFalse(new SupportedVersionRange((short) 1, (short) 4).isIncompatibleWith((short) 1));
+        assertFalse(new SupportedVersionRange((short) 1, (short) 4).isIncompatibleWith((short) 4));
+
+        assertTrue(new SupportedVersionRange((short) 2, (short) 3).isIncompatibleWith((short) 1));
+        assertTrue(new SupportedVersionRange((short) 2, (short) 3).isIncompatibleWith((short) 4));
     }
 }

@@ -22,38 +22,36 @@ import org.apache.kafka.common.message.LeaveGroupRequestData.MemberIdentity;
 import org.apache.kafka.common.message.LeaveGroupResponseData;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
-import org.junit.Before;
-import org.junit.Test;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class LeaveGroupRequestTest {
 
     private final String groupId = "group_id";
     private final String memberIdOne = "member_1";
-    private final String instanceIdOne = "instance_1";
-    private final String memberIdTwo = "member_2";
-    private final String instanceIdTwo = "instance_2";
 
     private final int throttleTimeMs = 10;
 
     private LeaveGroupRequest.Builder builder;
     private List<MemberIdentity> members;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         members = Arrays.asList(new MemberIdentity()
                                          .setMemberId(memberIdOne)
-                                         .setGroupInstanceId(instanceIdOne),
+                                         .setGroupInstanceId("instance_1"),
                                 new MemberIdentity()
-                                         .setMemberId(memberIdTwo)
-                                         .setGroupInstanceId(instanceIdTwo));
+                                         .setMemberId("member_2")
+                                         .setGroupInstanceId("instance_2"));
         builder = new LeaveGroupRequest.Builder(
             groupId,
             members
@@ -66,27 +64,29 @@ public class LeaveGroupRequestTest {
                                                        .setGroupId(groupId)
                                                        .setMembers(members);
 
-        for (short version = 0; version <= ApiKeys.LEAVE_GROUP.latestVersion(); version++) {
-            try {
+        for (short version : ApiKeys.LEAVE_GROUP.allVersions()) {
+            if (version <= 2) {
+                UnsupportedVersionException e = assertThrows(
+                        UnsupportedVersionException.class,
+                        () -> builder.build(version), "Older version " + version + " request data should not be created due to non-single members"
+                );
+                assertTrue(e.getMessage().contains("leave group request only supports single member instance"));
+            } else {
                 LeaveGroupRequest request = builder.build(version);
-                if (version <= 2) {
-                    fail("Older version " + version +
-                             " request data should not be created due to non-single members");
-                }
                 assertEquals(expectedData, request.data());
                 assertEquals(members, request.members());
 
                 LeaveGroupResponse expectedResponse = new LeaveGroupResponse(
-                    Collections.emptyList(),
-                    Errors.COORDINATOR_LOAD_IN_PROGRESS,
-                    throttleTimeMs,
-                    version
+                        Collections.emptyList(),
+                        Errors.COORDINATOR_LOAD_IN_PROGRESS,
+                        throttleTimeMs,
+                        version
                 );
 
-                assertEquals(expectedResponse, request.getErrorResponse(throttleTimeMs,
-                                                                        Errors.COORDINATOR_LOAD_IN_PROGRESS.exception()));
-            } catch (UnsupportedVersionException e) {
-                assertTrue(e.getMessage().contains("leave group request only supports single member instance"));
+                assertEquals(
+                        expectedResponse,
+                        request.getErrorResponse(throttleTimeMs, Errors.COORDINATOR_LOAD_IN_PROGRESS.exception())
+                );
             }
         }
 
@@ -121,8 +121,9 @@ public class LeaveGroupRequestTest {
         }
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testBuildEmptyMembers() {
-        new LeaveGroupRequest.Builder(groupId, Collections.emptyList());
+        assertThrows(IllegalArgumentException.class,
+            () -> new LeaveGroupRequest.Builder(groupId, Collections.emptyList()));
     }
 }

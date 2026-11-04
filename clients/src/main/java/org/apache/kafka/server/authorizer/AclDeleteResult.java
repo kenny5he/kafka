@@ -17,15 +17,15 @@
 
 package org.apache.kafka.server.authorizer;
 
-import java.util.Collections;
-import java.util.Collection;
-import java.util.Optional;
-
 import org.apache.kafka.common.acl.AclBinding;
-import org.apache.kafka.common.annotation.InterfaceStability;
+import org.apache.kafka.common.annotation.InterfaceAudience;
 import org.apache.kafka.common.errors.ApiException;
 
-@InterfaceStability.Evolving
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Optional;
+
+@InterfaceAudience.Public
 public class AclDeleteResult {
     private final ApiException exception;
     private final Collection<AclBindingDeleteResult> aclBindingDeleteResults;

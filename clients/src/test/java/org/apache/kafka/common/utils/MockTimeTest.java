@@ -16,16 +16,13 @@
  */
 package org.apache.kafka.common.utils;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.Timeout;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
-public class MockTimeTest extends TimeTest {
-
-    @Rule
-    final public Timeout globalTimeout = Timeout.millis(120000);
+@Timeout(120)
+public class MockTimeTest {
 
     @Test
     public void testAdvanceClock() {
@@ -44,10 +41,5 @@ public class MockTimeTest extends TimeTest {
         assertEquals(2000200, time.nanoseconds());
         assertEquals(103, time.milliseconds());
         assertEquals(104, time.milliseconds());
-    }
-
-    @Override
-    protected Time createTime() {
-        return new MockTime();
     }
 }

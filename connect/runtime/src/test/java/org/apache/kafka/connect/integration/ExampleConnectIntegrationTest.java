@@ -16,16 +16,15 @@
  */
 package org.apache.kafka.connect.integration;
 
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.connect.runtime.rest.entities.ConnectorStateInfo;
 import org.apache.kafka.connect.storage.StringConverter;
 import org.apache.kafka.connect.util.clusters.EmbeddedConnectCluster;
-import org.apache.kafka.test.IntegrationTest;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
-import org.junit.rules.TestRule;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,6 +32,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 import static org.apache.kafka.connect.runtime.ConnectorConfig.CONNECTOR_CLASS_CONFIG;
 import static org.apache.kafka.connect.runtime.ConnectorConfig.KEY_CONVERTER_CLASS_CONFIG;
@@ -44,8 +44,8 @@ import static org.apache.kafka.connect.runtime.TopicCreationConfig.PARTITIONS_CO
 import static org.apache.kafka.connect.runtime.TopicCreationConfig.REPLICATION_FACTOR_CONFIG;
 import static org.apache.kafka.connect.runtime.WorkerConfig.OFFSET_COMMIT_INTERVAL_MS_CONFIG;
 import static org.apache.kafka.test.TestUtils.waitForCondition;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * An example integration test that demonstrates how to setup an integration test for Connect.
@@ -53,7 +53,7 @@ import static org.junit.Assert.assertTrue;
  * The following test configures and executes up a sink connector pipeline in a worker, produces messages into
  * the source topic-partitions, and demonstrates how to check the overall behavior of the pipeline.
  */
-@Category(IntegrationTest.class)
+@Tag("integration")
 public class ExampleConnectIntegrationTest {
 
     private static final Logger log = LoggerFactory.getLogger(ExampleConnectIntegrationTest.class);
@@ -65,16 +65,13 @@ public class ExampleConnectIntegrationTest {
     private static final int NUM_TASKS = 3;
     private static final int NUM_WORKERS = 3;
     private static final String CONNECTOR_NAME = "simple-conn";
-    private static final String SINK_CONNECTOR_CLASS_NAME = MonitorableSinkConnector.class.getSimpleName();
-    private static final String SOURCE_CONNECTOR_CLASS_NAME = MonitorableSourceConnector.class.getSimpleName();
+    private static final String SINK_CONNECTOR_CLASS_NAME = TestableSinkConnector.class.getSimpleName();
+    private static final String SOURCE_CONNECTOR_CLASS_NAME = TestableSourceConnector.class.getSimpleName();
 
     private EmbeddedConnectCluster connect;
     private ConnectorHandle connectorHandle;
 
-    @Rule
-    public TestRule watcher = ConnectIntegrationTestUtils.newTestWatcher(log);
-
-    @Before
+    @BeforeEach
     public void setup() {
         // setup Connect worker properties
         Map<String, String> exampleWorkerProps = new HashMap<>();
@@ -84,7 +81,7 @@ public class ExampleConnectIntegrationTest {
         Properties exampleBrokerProps = new Properties();
         exampleBrokerProps.put("auto.create.topics.enable", "false");
 
-        // build a Connect cluster backed by Kafka and Zk
+        // build a Connect cluster backed by a Kafka KRaft cluster
         connect = new EmbeddedConnectCluster.Builder()
                 .name("connect-cluster")
                 .numWorkers(NUM_WORKERS)
@@ -100,12 +97,12 @@ public class ExampleConnectIntegrationTest {
         connectorHandle = RuntimeHandles.get().connectorHandle(CONNECTOR_NAME);
     }
 
-    @After
+    @AfterEach
     public void close() {
         // delete connector handle
         RuntimeHandles.get().deleteConnector(CONNECTOR_NAME);
 
-        // stop all Connect, Kafka and Zk threads.
+        // stop the Connect cluster and its backing Kafka cluster.
         connect.stop();
     }
 
@@ -151,13 +148,14 @@ public class ExampleConnectIntegrationTest {
                 "Connector tasks were not assigned a partition each.");
 
         // produce some messages into source topic partitions
-        for (int i = 0; i < NUM_RECORDS_PRODUCED; i++) {
-            connect.kafka().produce("test-topic", i % NUM_TOPIC_PARTITIONS, "key", "simple-message-value-" + i);
-        }
+        connect.kafka().produce(IntStream.range(0, NUM_RECORDS_PRODUCED)
+                .mapToObj(i -> new ProducerRecord<>("test-topic", i % NUM_TOPIC_PARTITIONS, "key".getBytes(), ("simple-message-value-" + i).getBytes()))
+                .toList());
 
         // consume all records from the source topic or fail, to ensure that they were correctly produced.
-        assertEquals("Unexpected number of records consumed", NUM_RECORDS_PRODUCED,
-                connect.kafka().consume(NUM_RECORDS_PRODUCED, RECORD_TRANSFER_DURATION_MS, "test-topic").count());
+        assertEquals(NUM_RECORDS_PRODUCED,
+                connect.kafka().consume(NUM_RECORDS_PRODUCED, RECORD_TRANSFER_DURATION_MS, "test-topic").count(),
+                "Unexpected number of records consumed");
 
         // wait for the connector tasks to consume all records.
         connectorHandle.awaitRecords(RECORD_TRANSFER_DURATION_MS);
@@ -217,8 +215,8 @@ public class ExampleConnectIntegrationTest {
 
         // consume all records from the source topic or fail, to ensure that they were correctly produced
         int recordNum = connect.kafka().consume(NUM_RECORDS_PRODUCED, RECORD_TRANSFER_DURATION_MS, "test-topic").count();
-        assertTrue("Not enough records produced by source connector. Expected at least: " + NUM_RECORDS_PRODUCED + " + but got " + recordNum,
-                recordNum >= NUM_RECORDS_PRODUCED);
+        assertTrue(recordNum >= NUM_RECORDS_PRODUCED,
+                "Not enough records produced by source connector. Expected at least: " + NUM_RECORDS_PRODUCED + " + but got " + recordNum);
 
         // delete connector
         connect.deleteConnector(CONNECTOR_NAME);
@@ -236,7 +234,7 @@ public class ExampleConnectIntegrationTest {
         try {
             ConnectorStateInfo info = connect.connectorStatus(CONNECTOR_NAME);
             return info != null && info.tasks().size() == NUM_TASKS
-                    && connectorHandle.tasks().stream().allMatch(th -> th.partitionsAssigned() == 1);
+                    && connectorHandle.tasks().stream().allMatch(th -> th.numPartitionsAssigned() == 1);
         } catch (Exception e) {
             // Log the exception and return that the partitions were not assigned
             log.error("Could not check connector state info.", e);

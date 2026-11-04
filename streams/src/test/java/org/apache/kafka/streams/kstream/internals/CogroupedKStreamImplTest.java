@@ -16,10 +16,6 @@
  */
 package org.apache.kafka.streams.kstream.internals;
 
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.hamcrest.MatcherAssert.assertThat;
-
-import java.util.Properties;
 import org.apache.kafka.common.serialization.IntegerDeserializer;
 import org.apache.kafka.common.serialization.IntegerSerializer;
 import org.apache.kafka.common.serialization.Serdes;
@@ -32,6 +28,7 @@ import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.TopologyTestDriverBuilder;
 import org.apache.kafka.streams.kstream.Aggregator;
 import org.apache.kafka.streams.kstream.CogroupedKStream;
 import org.apache.kafka.streams.kstream.Consumed;
@@ -43,15 +40,24 @@ import org.apache.kafka.streams.kstream.KTable;
 import org.apache.kafka.streams.kstream.Materialized;
 import org.apache.kafka.streams.kstream.Named;
 import org.apache.kafka.streams.kstream.SessionWindows;
+import org.apache.kafka.streams.kstream.SlidingWindows;
 import org.apache.kafka.streams.kstream.Window;
 import org.apache.kafka.streams.kstream.Windows;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.test.TestRecord;
 import org.apache.kafka.test.MockAggregator;
 import org.apache.kafka.test.MockInitializer;
+import org.apache.kafka.test.MockValueJoiner;
 import org.apache.kafka.test.StreamsTestUtils;
-import org.junit.Before;
-import org.junit.Test;
+
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import java.util.Properties;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class CogroupedKStreamImplTest {
     private final Consumed<String, String> stringConsumed = Consumed.with(Serdes.String(), Serdes.String());
@@ -76,8 +82,8 @@ public class CogroupedKStreamImplTest {
     private static final Initializer<Integer> SUM_INITIALIZER = () -> 0;
 
 
-    @Before
-    public void setup() {
+    private void setup(final boolean withHeaders) {
+        StreamsTestUtils.maybeSetDslStoreFormatHeaders(props, withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final KStream<String, String> stream = builder.stream(TOPIC, Consumed.with(Serdes.String(), Serdes.String()));
 
@@ -85,68 +91,101 @@ public class CogroupedKStreamImplTest {
         cogroupedStream = groupedStream.cogroup(MockAggregator.TOSTRING_ADDER);
     }
 
-    @Test(expected = NullPointerException.class)
-    public void shouldThrowNPEInCogroupIfKGroupedStreamIsNull() {
-        cogroupedStream.cogroup(null, MockAggregator.TOSTRING_ADDER);
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldThrowNPEInCogroupIfKGroupedStreamIsNull(final boolean withHeaders) {
+        setup(withHeaders);
+        assertThrows(NullPointerException.class, () -> cogroupedStream.cogroup(null, MockAggregator.TOSTRING_ADDER));
     }
 
-    @Test(expected = NullPointerException.class)
-    public void shouldNotHaveNullAggregatorOnCogroup() {
-        cogroupedStream.cogroup(groupedStream, null);
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotHaveNullAggregatorOnCogroup(final boolean withHeaders) {
+        setup(withHeaders);
+        assertThrows(NullPointerException.class, () -> cogroupedStream.cogroup(groupedStream, null));
     }
 
-    @Test(expected = NullPointerException.class)
-    public void shouldNotHaveNullInitializerOnAggregate() {
-        cogroupedStream.aggregate(null);
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotHaveNullInitializerOnAggregate(final boolean withHeaders) {
+        setup(withHeaders);
+        assertThrows(NullPointerException.class, () -> cogroupedStream.aggregate(null));
     }
 
-    @Test(expected = NullPointerException.class)
-    public void shouldNotHaveNullInitializerOnAggregateWitNamed() {
-        cogroupedStream.aggregate(null, Named.as("name"));
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotHaveNullInitializerOnAggregateWitNamed(final boolean withHeaders) {
+        setup(withHeaders);
+        assertThrows(NullPointerException.class, () -> cogroupedStream.aggregate(null, Named.as("name")));
     }
 
-    @Test(expected = NullPointerException.class)
-    public void shouldNotHaveNullInitializerOnAggregateWitMaterialized() {
-        cogroupedStream.aggregate(null, Materialized.as("store"));
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotHaveNullInitializerOnAggregateWitMaterialized(final boolean withHeaders) {
+        setup(withHeaders);
+        assertThrows(NullPointerException.class, () -> cogroupedStream.aggregate(null, Materialized.as("store")));
     }
 
-    @Test(expected = NullPointerException.class)
-    public void shouldNotHaveNullInitializerOnAggregateWitNamedAndMaterialized() {
-        cogroupedStream.aggregate(null, Named.as("name"), Materialized.as("store"));
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotHaveNullInitializerOnAggregateWitNamedAndMaterialized(final boolean withHeaders) {
+        setup(withHeaders);
+        assertThrows(NullPointerException.class, () -> cogroupedStream.aggregate(null, Named.as("name"), Materialized.as("store")));
     }
 
-    @Test(expected = NullPointerException.class)
-    public void shouldNotHaveNullNamedOnAggregate() {
-        cogroupedStream.aggregate(STRING_INITIALIZER, (Named) null);
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotHaveNullNamedOnAggregate(final boolean withHeaders) {
+        setup(withHeaders);
+        assertThrows(NullPointerException.class, () -> cogroupedStream.aggregate(STRING_INITIALIZER, (Named) null));
     }
 
-    @Test(expected = NullPointerException.class)
-    public void shouldNotHaveNullMaterializedOnAggregate() {
-        cogroupedStream.aggregate(STRING_INITIALIZER, (Materialized<String, String, KeyValueStore<Bytes, byte[]>>) null);
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotHaveNullMaterializedOnAggregate(final boolean withHeaders) {
+        setup(withHeaders);
+        assertThrows(NullPointerException.class, () -> cogroupedStream.aggregate(STRING_INITIALIZER, (Materialized<String, String, KeyValueStore<Bytes, byte[]>>) null));
     }
 
-    @Test(expected = NullPointerException.class)
-    public void shouldNotHaveNullNamedOnAggregateWithMateriazlied() {
-        cogroupedStream.aggregate(STRING_INITIALIZER,  null,  Materialized.as("store"));
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotHaveNullNamedOnAggregateWithMaterialized(final boolean withHeaders) {
+        setup(withHeaders);
+        assertThrows(NullPointerException.class, () -> cogroupedStream.aggregate(STRING_INITIALIZER,  null,  Materialized.as("store")));
     }
 
-    @Test(expected = NullPointerException.class)
-    public void shouldNotHaveNullMaterializedOnAggregateWithNames() {
-        cogroupedStream.aggregate(STRING_INITIALIZER, Named.as("name"), null);
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotHaveNullMaterializedOnAggregateWithNames(final boolean withHeaders) {
+        setup(withHeaders);
+        assertThrows(NullPointerException.class, () -> cogroupedStream.aggregate(STRING_INITIALIZER, Named.as("name"), null));
     }
 
-    @Test(expected = NullPointerException.class)
-    public void shouldNotHaveNullWindowOnWindowedByTime() {
-        cogroupedStream.windowedBy((Windows<? extends Window>) null);
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotHaveNullWindowOnWindowedByTime(final boolean withHeaders) {
+        setup(withHeaders);
+        assertThrows(NullPointerException.class, () -> cogroupedStream.windowedBy((Windows<? extends Window>) null));
     }
 
-    @Test(expected = NullPointerException.class)
-    public void shouldNotHaveNullWindowOnWindowedBySession() {
-        cogroupedStream.windowedBy((SessionWindows) null);
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotHaveNullWindowOnWindowedBySession(final boolean withHeaders) {
+        setup(withHeaders);
+        assertThrows(NullPointerException.class, () -> cogroupedStream.windowedBy((SessionWindows) null));
     }
 
-    @Test
-    public void shouldNameProcessorsAndStoreBasedOnNamedParameter() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotHaveNullWindowOnWindowedBySliding(final boolean withHeaders) {
+        setup(withHeaders);
+        assertThrows(NullPointerException.class, () -> cogroupedStream.windowedBy((SlidingWindows) null));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNameProcessorsAndStoreBasedOnNamedParameter(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
@@ -164,9 +203,8 @@ public class CogroupedKStreamImplTest {
 
         final String topologyDescription = builder.build().describe().toString();
 
-        assertThat(
-            topologyDescription,
-            equalTo("Topologies:\n" +
+        assertEquals(
+            "Topologies:\n" +
                 "   Sub-topology: 0\n" +
                 "    Source: KSTREAM-SOURCE-0000000000 (topics: [one])\n" +
                 "      --> test-cogroup-agg-0\n" +
@@ -185,11 +223,14 @@ public class CogroupedKStreamImplTest {
                 "      --> KSTREAM-SINK-0000000006\n" +
                 "      <-- test-cogroup-merge\n" +
                 "    Sink: KSTREAM-SINK-0000000006 (topic: output)\n" +
-                "      <-- KTABLE-TOSTREAM-0000000005\n\n"));
+                "      <-- KTABLE-TOSTREAM-0000000005\n\n",
+            topologyDescription);
     }
 
-    @Test
-    public void shouldNameRepartitionTopic() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNameRepartitionTopic(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
@@ -207,9 +248,8 @@ public class CogroupedKStreamImplTest {
 
         final String topologyDescription = builder.build().describe().toString();
 
-        assertThat(
-                topologyDescription,
-                equalTo("Topologies:\n" +
+        assertEquals(
+                "Topologies:\n" +
                         "   Sub-topology: 0\n" +
                         "    Source: KSTREAM-SOURCE-0000000000 (topics: [one])\n" +
                         "      --> KSTREAM-MAP-0000000002\n" +
@@ -239,11 +279,14 @@ public class CogroupedKStreamImplTest {
                         "      --> KSTREAM-SINK-0000000011\n" +
                         "      <-- COGROUPKSTREAM-MERGE-0000000009\n" +
                         "    Sink: KSTREAM-SINK-0000000011 (topic: output)\n" +
-                        "      <-- KTABLE-TOSTREAM-0000000010\n\n"));
+                        "      <-- KTABLE-TOSTREAM-0000000010\n\n",
+                topologyDescription);
     }
 
-    @Test
-    public void shouldInsertRepartitionsTopicForUpstreamKeyModification() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldInsertRepartitionsTopicForUpstreamKeyModification(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
         final KStream<String, String> test2 = builder.stream("two", stringConsumed);
@@ -260,9 +303,8 @@ public class CogroupedKStreamImplTest {
 
         final String topologyDescription = builder.build().describe().toString();
 
-        assertThat(
-                topologyDescription,
-                equalTo("Topologies:\n" +
+        assertEquals(
+                "Topologies:\n" +
                         "   Sub-topology: 0\n" +
                         "    Source: KSTREAM-SOURCE-0000000000 (topics: [one])\n" +
                         "      --> KSTREAM-MAP-0000000002\n" +
@@ -292,11 +334,14 @@ public class CogroupedKStreamImplTest {
                         "      --> KSTREAM-SINK-0000000010\n" +
                         "      <-- test-cogroup-merge\n" +
                         "    Sink: KSTREAM-SINK-0000000010 (topic: output)\n" +
-                        "      <-- KTABLE-TOSTREAM-0000000009\n\n"));
+                        "      <-- KTABLE-TOSTREAM-0000000009\n\n",
+                topologyDescription);
     }
 
-    @Test
-    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedReusedInSameCogroups() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedReusedInSameCogroups(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
@@ -320,9 +365,8 @@ public class CogroupedKStreamImplTest {
 
         final String topologyDescription = builder.build().describe().toString();
 
-        assertThat(
-                topologyDescription,
-                equalTo("Topologies:\n" +
+        assertEquals(
+                "Topologies:\n" +
                         "   Sub-topology: 0\n" +
                         "    Source: KSTREAM-SOURCE-0000000000 (topics: [one])\n" +
                         "      --> KSTREAM-MAP-0000000002\n" +
@@ -373,13 +417,15 @@ public class CogroupedKStreamImplTest {
                         "    Sink: KSTREAM-SINK-0000000018 (topic: output)\n" +
                         "      <-- KTABLE-TOSTREAM-0000000017\n" +
                         "    Sink: KSTREAM-SINK-0000000020 (topic: OUTPUT2)\n" +
-                        "      <-- KTABLE-TOSTREAM-0000000019\n\n"));
+                        "      <-- KTABLE-TOSTREAM-0000000019\n\n",
+                topologyDescription);
     }
 
-    @Test
-    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedReusedInSameCogroupsWithOptimization() {
-        final Properties properties = new Properties();
-        properties.setProperty(StreamsConfig.TOPOLOGY_OPTIMIZATION, StreamsConfig.OPTIMIZE);
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedReusedInSameCogroupsWithOptimization(final boolean withHeaders) {
+        setup(withHeaders);
+        props.setProperty(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.OPTIMIZE);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
@@ -401,11 +447,10 @@ public class CogroupedKStreamImplTest {
         cogroupedOne.toStream().to(OUTPUT);
         cogroupedTwo.toStream().to("OUTPUT2");
 
-        final String topologyDescription = builder.build(properties).describe().toString();
+        final String topologyDescription = builder.build(props).describe().toString();
 
-        assertThat(
-                topologyDescription,
-                equalTo("Topologies:\n" +
+        assertEquals(
+                "Topologies:\n" +
                         "   Sub-topology: 0\n" +
                         "    Source: KSTREAM-SOURCE-0000000000 (topics: [one])\n" +
                         "      --> KSTREAM-MAP-0000000002\n" +
@@ -449,11 +494,14 @@ public class CogroupedKStreamImplTest {
                         "    Sink: KSTREAM-SINK-0000000018 (topic: output)\n" +
                         "      <-- KTABLE-TOSTREAM-0000000017\n" +
                         "    Sink: KSTREAM-SINK-0000000020 (topic: OUTPUT2)\n" +
-                        "      <-- KTABLE-TOSTREAM-0000000019\n\n"));
+                        "      <-- KTABLE-TOSTREAM-0000000019\n\n",
+                topologyDescription);
     }
 
-    @Test
-    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedReusedInDifferentCogroups() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedReusedInDifferentCogroups(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
@@ -474,9 +522,8 @@ public class CogroupedKStreamImplTest {
 
         final String topologyDescription = builder.build().describe().toString();
 
-        assertThat(
-                topologyDescription,
-                equalTo("Topologies:\n" +
+        assertEquals(
+                "Topologies:\n" +
                         "   Sub-topology: 0\n" +
                         "    Source: KSTREAM-SOURCE-0000000000 (topics: [one])\n" +
                         "      --> KSTREAM-MAP-0000000003\n" +
@@ -520,15 +567,18 @@ public class CogroupedKStreamImplTest {
                         "      <-- KSTREAM-SOURCE-0000000002\n" +
                         "    Processor: COGROUPKSTREAM-MERGE-0000000010 (stores: [])\n" +
                         "      --> none\n" +
-                        "      <-- COGROUPKSTREAM-AGGREGATE-0000000008, COGROUPKSTREAM-AGGREGATE-0000000009\n\n"));
+                        "      <-- COGROUPKSTREAM-AGGREGATE-0000000008, COGROUPKSTREAM-AGGREGATE-0000000009\n\n",
+                topologyDescription);
     }
 
-    @Test
-    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedReusedInDifferentCogroupsWithOptimization() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedReusedInDifferentCogroupsWithOptimization(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final Properties properties = new Properties();
-        properties.setProperty(StreamsConfig.TOPOLOGY_OPTIMIZATION, StreamsConfig.OPTIMIZE);
+        properties.setProperty(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.OPTIMIZE);
 
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
         final KStream<String, String> stream2 = builder.stream("two", stringConsumed);
@@ -548,9 +598,8 @@ public class CogroupedKStreamImplTest {
 
         final String topologyDescription = builder.build(properties).describe().toString();
 
-        assertThat(
-                topologyDescription,
-                equalTo("Topologies:\n" +
+        assertEquals(
+                "Topologies:\n" +
                         "   Sub-topology: 0\n" +
                         "    Source: KSTREAM-SOURCE-0000000000 (topics: [one])\n" +
                         "      --> KSTREAM-MAP-0000000003\n" +
@@ -586,11 +635,14 @@ public class CogroupedKStreamImplTest {
                         "      <-- COGROUPKSTREAM-AGGREGATE-0000000008, COGROUPKSTREAM-AGGREGATE-0000000009\n" +
                         "    Processor: COGROUPKSTREAM-MERGE-0000000017 (stores: [])\n" +
                         "      --> none\n" +
-                        "      <-- COGROUPKSTREAM-AGGREGATE-0000000015, COGROUPKSTREAM-AGGREGATE-0000000016\n\n"));
+                        "      <-- COGROUPKSTREAM-AGGREGATE-0000000015, COGROUPKSTREAM-AGGREGATE-0000000016\n\n",
+                topologyDescription);
     }
 
-    @Test
-    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedReused() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedReused(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
@@ -607,9 +659,8 @@ public class CogroupedKStreamImplTest {
 
         final String topologyDescription = builder.build().describe().toString();
 
-        assertThat(
-                topologyDescription,
-                equalTo("Topologies:\n" +
+        assertEquals(
+                "Topologies:\n" +
                         "   Sub-topology: 0\n" +
                         "    Source: KSTREAM-SOURCE-0000000000 (topics: [one])\n" +
                         "      --> KSTREAM-MAP-0000000002\n" +
@@ -645,15 +696,18 @@ public class CogroupedKStreamImplTest {
                         "      --> KSTREAM-AGGREGATE-0000000011\n" +
                         "    Processor: KSTREAM-AGGREGATE-0000000011 (stores: [KSTREAM-AGGREGATE-STATE-STORE-0000000010])\n" +
                         "      --> none\n" +
-                        "      <-- KSTREAM-SOURCE-0000000014\n\n"));
+                        "      <-- KSTREAM-SOURCE-0000000014\n\n",
+                topologyDescription);
     }
 
-    @Test
-    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedReusedWithOptimization() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedReusedWithOptimization(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final Properties properties = new Properties();
-        properties.setProperty(StreamsConfig.TOPOLOGY_OPTIMIZATION, StreamsConfig.OPTIMIZE);
+        properties.setProperty(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.OPTIMIZE);
 
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
         final KStream<String, String> stream2 = builder.stream("two", stringConsumed);
@@ -669,9 +723,8 @@ public class CogroupedKStreamImplTest {
 
         final String topologyDescription = builder.build(properties).describe().toString();
 
-        assertThat(
-                topologyDescription,
-                equalTo("Topologies:\n" +
+        assertEquals(
+                "Topologies:\n" +
                         "   Sub-topology: 0\n" +
                         "    Source: KSTREAM-SOURCE-0000000000 (topics: [one])\n" +
                         "      --> KSTREAM-MAP-0000000002\n" +
@@ -699,15 +752,18 @@ public class CogroupedKStreamImplTest {
                         "      <-- COGROUPKSTREAM-AGGREGATE-0000000007, COGROUPKSTREAM-AGGREGATE-0000000008\n" +
                         "    Processor: KSTREAM-AGGREGATE-0000000011 (stores: [KSTREAM-AGGREGATE-STATE-STORE-0000000010])\n" +
                         "      --> none\n" +
-                        "      <-- COGROUPKSTREAM-AGGREGATE-STATE-STORE-0000000003-repartition-source\n\n"));
+                        "      <-- COGROUPKSTREAM-AGGREGATE-STATE-STORE-0000000003-repartition-source\n\n",
+                topologyDescription);
     }
 
-    @Test
-    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedRemadeWithOptimization() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldInsertRepartitionsTopicForUpstreamKeyModificationWithGroupedRemadeWithOptimization(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final Properties properties = new Properties();
-        properties.setProperty(StreamsConfig.TOPOLOGY_OPTIMIZATION, StreamsConfig.OPTIMIZE);
+        properties.setProperty(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.OPTIMIZE);
 
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
         final KStream<String, String> stream2 = builder.stream("two", stringConsumed);
@@ -730,9 +786,8 @@ public class CogroupedKStreamImplTest {
 
         final String topologyDescription = builder.build(properties).describe().toString();
 
-        assertThat(
-                topologyDescription,
-                equalTo("Topologies:\n" +
+        assertEquals(
+                "Topologies:\n" +
                         "   Sub-topology: 0\n" +
                         "    Source: KSTREAM-SOURCE-0000000000 (topics: [one])\n" +
                         "      --> KSTREAM-MAP-0000000003, KSTREAM-MAP-0000000004\n" +
@@ -779,11 +834,14 @@ public class CogroupedKStreamImplTest {
                         "      <-- COGROUPKSTREAM-AGGREGATE-STATE-STORE-0000000012-repartition-source\n" +
                         "    Processor: COGROUPKSTREAM-MERGE-0000000018 (stores: [])\n" +
                         "      --> none\n" +
-                        "      <-- COGROUPKSTREAM-AGGREGATE-0000000016, COGROUPKSTREAM-AGGREGATE-0000000017\n\n"));
+                        "      <-- COGROUPKSTREAM-AGGREGATE-0000000016, COGROUPKSTREAM-AGGREGATE-0000000017\n\n",
+                topologyDescription);
     }
 
-    @Test
-    public void shouldInsertRepartitionsTopicForCogroupsUsedTwice() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldInsertRepartitionsTopicForCogroupsUsedTwice(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final Properties properties = new Properties();
@@ -798,9 +856,8 @@ public class CogroupedKStreamImplTest {
 
         final String topologyDescription = builder.build(properties).describe().toString();
 
-        assertThat(
-                topologyDescription,
-                equalTo("Topologies:\n" +
+        assertEquals(
+                "Topologies:\n" +
                         "   Sub-topology: 0\n" +
                         "    Source: KSTREAM-SOURCE-0000000000 (topics: [one])\n" +
                         "      --> KSTREAM-MAP-0000000001\n" +
@@ -826,11 +883,14 @@ public class CogroupedKStreamImplTest {
                         "      <-- COGROUPKSTREAM-AGGREGATE-0000000006\n" +
                         "    Processor: COGROUPKSTREAM-MERGE-0000000013 (stores: [])\n" +
                         "      --> none\n" +
-                        "      <-- COGROUPKSTREAM-AGGREGATE-0000000012\n\n"));
+                        "      <-- COGROUPKSTREAM-AGGREGATE-0000000012\n\n",
+                topologyDescription);
     }
 
-    @Test
-    public void shouldCogroupAndAggregateSingleKStreams() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldCogroupAndAggregateSingleKStreams(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
 
@@ -842,7 +902,7 @@ public class CogroupedKStreamImplTest {
 
         customers.toStream().to(OUTPUT);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<String, String> testInputTopic =
                 driver.createInputTopic("one", new StringSerializer(), new StringSerializer());
             final TestOutputTopic<String, String> testOutputTopic =
@@ -859,8 +919,10 @@ public class CogroupedKStreamImplTest {
         }
     }
 
-    @Test
-    public void testCogroupHandleNullValues() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void testCogroupHandleNullValues(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
 
@@ -872,7 +934,7 @@ public class CogroupedKStreamImplTest {
 
         customers.toStream().to(OUTPUT);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<String, String> testInputTopic = driver.createInputTopic("one", new StringSerializer(), new StringSerializer());
             final TestOutputTopic<String, String> testOutputTopic = driver.createOutputTopic(OUTPUT, new StringDeserializer(), new StringDeserializer());
             testInputTopic.pipeInput("k1", "A", 0);
@@ -888,8 +950,10 @@ public class CogroupedKStreamImplTest {
         }
     }
 
-    @Test
-    public void shouldCogroupAndAggregateTwoKStreamsWithDistinctKeys() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldCogroupAndAggregateTwoKStreamsWithDistinctKeys(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
         final KStream<String, String> stream2 = builder.stream("two", stringConsumed);
@@ -904,7 +968,7 @@ public class CogroupedKStreamImplTest {
 
         customers.toStream().to(OUTPUT);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<String, String> testInputTopic =
                 driver.createInputTopic("one", new StringSerializer(), new StringSerializer());
             final TestInputTopic<String, String> testInputTopic2 =
@@ -936,8 +1000,10 @@ public class CogroupedKStreamImplTest {
         }
     }
 
-    @Test
-    public void shouldCogroupAndAggregateTwoKStreamsWithSharedKeys() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldCogroupAndAggregateTwoKStreamsWithSharedKeys(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
         final KStream<String, String> stream2 = builder.stream("two", stringConsumed);
@@ -952,7 +1018,7 @@ public class CogroupedKStreamImplTest {
 
         customers.toStream().to(OUTPUT);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<String, String> testInputTopic =
                 driver.createInputTopic("one", new StringSerializer(), new StringSerializer());
             final TestInputTopic<String, String> testInputTopic2 =
@@ -986,8 +1052,10 @@ public class CogroupedKStreamImplTest {
         }
     }
 
-    @Test
-    public void shouldAllowDifferentOutputTypeInCoGroup() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldAllowDifferentOutputTypeInCoGroup(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
         final KStream<String, String> stream2 = builder.stream("two", stringConsumed);
@@ -1005,7 +1073,7 @@ public class CogroupedKStreamImplTest {
 
         customers.toStream().to(OUTPUT);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<String, String> testInputTopic =
                 driver.createInputTopic("one", new StringSerializer(), new StringSerializer());
             final TestInputTopic<String, String> testInputTopic2 =
@@ -1039,8 +1107,10 @@ public class CogroupedKStreamImplTest {
         }
     }
 
-    @Test
-    public void shouldCoGroupStreamsWithDifferentInputTypes() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldCoGroupStreamsWithDifferentInputTypes(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final Consumed<String, Integer> integerConsumed = Consumed.with(Serdes.String(), Serdes.Integer());
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
@@ -1059,7 +1129,7 @@ public class CogroupedKStreamImplTest {
 
         customers.toStream().to(OUTPUT);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<String, String> testInputTopic = driver.createInputTopic("one", new StringSerializer(), new StringSerializer());
             final TestInputTopic<String, Integer> testInputTopic2 = driver.createInputTopic("two", new StringSerializer(), new IntegerSerializer());
             final TestOutputTopic<String, Integer> testOutputTopic = driver.createOutputTopic(OUTPUT, new StringDeserializer(), new IntegerDeserializer());
@@ -1091,8 +1161,10 @@ public class CogroupedKStreamImplTest {
         }
     }
 
-    @Test
-    public void testCogroupKeyMixedAggregators() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void testCogroupKeyMixedAggregators(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
         final KStream<String, String> stream2 = builder.stream("two", stringConsumed);
@@ -1110,7 +1182,7 @@ public class CogroupedKStreamImplTest {
 
         customers.toStream().to(OUTPUT);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<String, String> testInputTopic =
                 driver.createInputTopic("one", new StringSerializer(), new StringSerializer());
             final TestInputTopic<String, String> testInputTopic2 =
@@ -1138,8 +1210,10 @@ public class CogroupedKStreamImplTest {
         }
     }
 
-    @Test
-    public void testCogroupWithThreeGroupedStreams() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void testCogroupWithThreeGroupedStreams(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final KStream<String, String> stream1 = builder.stream("one", stringConsumed);
         final KStream<String, String> stream2 = builder.stream("two", stringConsumed);
@@ -1157,7 +1231,7 @@ public class CogroupedKStreamImplTest {
 
         customers.toStream().to(OUTPUT);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<String, String> testInputTopic =
                 driver.createInputTopic("one", new StringSerializer(), new StringSerializer());
             final TestInputTopic<String, String> testInputTopic2 =
@@ -1195,21 +1269,59 @@ public class CogroupedKStreamImplTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void testCogroupWithKTableKTableInnerJoin(final boolean withHeaders) {
+        setup(withHeaders);
+        final StreamsBuilder builder = new StreamsBuilder();
+
+        final KGroupedStream<String, String> grouped1 = builder.stream("one", stringConsumed).groupByKey();
+        final KGroupedStream<String, String> grouped2 = builder.stream("two", stringConsumed).groupByKey();
+
+        final KTable<String, String> table1 = grouped1
+            .cogroup(STRING_AGGREGATOR)
+            .cogroup(grouped2, STRING_AGGREGATOR)
+            .aggregate(STRING_INITIALIZER, Named.as("name"), Materialized.as("store"));
+
+        final KTable<String, String> table2 = builder.table("three", stringConsumed);
+        final KTable<String, String> joined = table1.join(table2, MockValueJoiner.TOSTRING_JOINER, Materialized.with(Serdes.String(), Serdes.String()));
+        joined.toStream().to(OUTPUT);
+
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
+            final TestInputTopic<String, String> testInputTopic =
+                driver.createInputTopic("one", new StringSerializer(), new StringSerializer());
+            final TestInputTopic<String, String> testInputTopic2 =
+                driver.createInputTopic("two", new StringSerializer(), new StringSerializer());
+            final TestInputTopic<String, String> testInputTopic3 =
+                driver.createInputTopic("three", new StringSerializer(), new StringSerializer());
+            final TestOutputTopic<String, String> testOutputTopic =
+                driver.createOutputTopic(OUTPUT, new StringDeserializer(), new StringDeserializer());
+
+            testInputTopic.pipeInput("k1", "A", 5L);
+            testInputTopic2.pipeInput("k2", "B", 6L);
+
+            assertTrue(testOutputTopic.isEmpty());
+
+            testInputTopic3.pipeInput("k1", "C", 0L);
+            testInputTopic3.pipeInput("k2", "D", 10L);
+
+            assertOutputKeyValueTimestamp(testOutputTopic, "k1", "A+C", 5L);
+            assertOutputKeyValueTimestamp(testOutputTopic, "k2", "B+D", 10L);
+            assertTrue(testOutputTopic.isEmpty());
+        }
+    }
+
     private void assertOutputKeyValueTimestamp(final TestOutputTopic<String, String> outputTopic,
                                                final String expectedKey,
                                                final String expectedValue,
                                                final long expectedTimestamp) {
-        assertThat(
-            outputTopic.readRecord(),
-            equalTo(new TestRecord<>(expectedKey, expectedValue, null, expectedTimestamp)));
+        assertEquals(new TestRecord<>(expectedKey, expectedValue, null, expectedTimestamp), outputTopic.readRecord());
     }
 
     private void assertOutputKeyValueTimestamp(final TestOutputTopic<String, Integer> outputTopic,
                                                final String expectedKey,
                                                final Integer expectedValue,
                                                final long expectedTimestamp) {
-        assertThat(
-            outputTopic.readRecord(),
-            equalTo(new TestRecord<>(expectedKey, expectedValue, null, expectedTimestamp)));
+        assertEquals(new TestRecord<>(expectedKey, expectedValue, null, expectedTimestamp), outputTopic.readRecord());
     }
 }

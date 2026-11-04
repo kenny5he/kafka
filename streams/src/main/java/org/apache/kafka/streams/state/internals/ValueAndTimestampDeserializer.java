@@ -16,16 +16,22 @@
  */
 package org.apache.kafka.streams.state.internals;
 
+import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.LongDeserializer;
+import org.apache.kafka.streams.kstream.internals.WrappingNullableDeserializer;
+import org.apache.kafka.streams.processor.internals.SerdeGetter;
 import org.apache.kafka.streams.state.ValueAndTimestamp;
 
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.Objects;
 
-class ValueAndTimestampDeserializer<V> implements Deserializer<ValueAndTimestamp<V>> {
-    private final static LongDeserializer LONG_DESERIALIZER = new LongDeserializer();
+import static org.apache.kafka.streams.kstream.internals.WrappingNullableUtils.initNullableDeserializer;
+
+class ValueAndTimestampDeserializer<V> implements WrappingNullableDeserializer<ValueAndTimestamp<V>, Void, V> {
+    private static final LongDeserializer LONG_DESERIALIZER = new LongDeserializer();
 
     public final Deserializer<V> valueDeserializer;
     private final Deserializer<Long> timestampDeserializer;
@@ -46,12 +52,19 @@ class ValueAndTimestampDeserializer<V> implements Deserializer<ValueAndTimestamp
     @Override
     public ValueAndTimestamp<V> deserialize(final String topic,
                                             final byte[] valueAndTimestamp) {
+        return deserialize(topic, new RecordHeaders(), valueAndTimestamp);
+    }
+
+    @Override
+    public ValueAndTimestamp<V> deserialize(final String topic,
+                                            final Headers headers,
+                                            final byte[] valueAndTimestamp) {
         if (valueAndTimestamp == null) {
             return null;
         }
 
-        final long timestamp = timestampDeserializer.deserialize(topic, rawTimestamp(valueAndTimestamp));
-        final V value = valueDeserializer.deserialize(topic, rawValue(valueAndTimestamp));
+        final long timestamp = timestampDeserializer.deserialize(topic, headers, rawTimestamp(valueAndTimestamp));
+        final V value = valueDeserializer.deserialize(topic, headers, rawValue(valueAndTimestamp));
         return ValueAndTimestamp.make(value, timestamp);
     }
 
@@ -62,8 +75,11 @@ class ValueAndTimestampDeserializer<V> implements Deserializer<ValueAndTimestamp
     }
 
     static byte[] rawValue(final byte[] rawValueAndTimestamp) {
-        final int rawValueLength = rawValueAndTimestamp.length - 8;
+        if (rawValueAndTimestamp == null) {
+            return null;
+        }
 
+        final int rawValueLength = rawValueAndTimestamp.length - 8;
         return ByteBuffer
             .allocate(rawValueLength)
             .put(rawValueAndTimestamp, 8, rawValueLength)
@@ -78,7 +94,15 @@ class ValueAndTimestampDeserializer<V> implements Deserializer<ValueAndTimestamp
     }
 
     static long timestamp(final byte[] rawValueAndTimestamp) {
-        return LONG_DESERIALIZER.deserialize(null, rawTimestamp(rawValueAndTimestamp));
+        // We know we use LongDeserializer here, so we don't need headers
+        // still use headers-aware version to be consistent in codebase
+        return LONG_DESERIALIZER.deserialize(null, null, rawTimestamp(rawValueAndTimestamp));
     }
 
+    @Override
+    public void setIfUnset(final SerdeGetter getter) {
+        // ValueAndTimestampDeserializer never wraps a null deserializer (or configure would throw),
+        // but it may wrap a deserializer that itself wraps a null deserializer.
+        initNullableDeserializer(valueDeserializer, getter);
+    }
 }

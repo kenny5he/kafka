@@ -17,15 +17,13 @@
 
 package org.apache.kafka.message;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.Timeout;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
+@Timeout(120)
 public class EntityTypeTest {
-    @Rule
-    final public Timeout globalTimeout = Timeout.millis(120000);
 
     @Test
     public void testUnknownEntityType() {
@@ -62,14 +60,14 @@ public class EntityTypeTest {
             FieldType.Int32FieldType.INSTANCE);
         EntityType.BROKER_ID.verifyTypeMatches("brokerIdField",
             new FieldType.ArrayType(FieldType.Int32FieldType.INSTANCE));
+        EntityType.MIRROR_NAME.verifyTypeMatches("mirrorNameField",
+            FieldType.StringFieldType.INSTANCE);
+        EntityType.MIRROR_NAME.verifyTypeMatches("mirrorNameField",
+            new FieldType.ArrayType(FieldType.StringFieldType.INSTANCE));
     }
 
     private static void expectException(Runnable r) {
-        try {
-            r.run();
-            fail("expected an exception");
-        } catch (RuntimeException e) {
-        }
+        assertThrows(RuntimeException.class, r::run);
     }
 
     @Test
@@ -85,5 +83,7 @@ public class EntityTypeTest {
                 new FieldType.ArrayType(FieldType.Int64FieldType.INSTANCE)));
         expectException(() -> EntityType.BROKER_ID.
             verifyTypeMatches("brokerIdField", FieldType.Int64FieldType.INSTANCE));
+        expectException(() -> EntityType.MIRROR_NAME.
+            verifyTypeMatches("mirrorNameField", FieldType.Int32FieldType.INSTANCE));
     }
 }

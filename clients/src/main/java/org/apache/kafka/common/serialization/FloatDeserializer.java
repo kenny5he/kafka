@@ -16,8 +16,13 @@
  */
 package org.apache.kafka.common.serialization;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
 import org.apache.kafka.common.errors.SerializationException;
+import org.apache.kafka.common.header.Headers;
 
+import java.nio.ByteBuffer;
+
+@InterfaceAudience.Public
 public class FloatDeserializer implements Deserializer<Float> {
     @Override
     public Float deserialize(final String topic, final byte[] data) {
@@ -33,5 +38,17 @@ public class FloatDeserializer implements Deserializer<Float> {
             value |= b & 0xFF;
         }
         return Float.intBitsToFloat(value);
+    }
+
+    @Override
+    public Float deserialize(String topic, Headers headers, ByteBuffer data) {
+        if (data == null) {
+            return null;
+        }
+
+        if (data.remaining() != 4) {
+            throw new SerializationException("Size of data received by Deserializer is not 4");
+        }
+        return data.getFloat(data.position());
     }
 }

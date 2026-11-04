@@ -22,7 +22,12 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.processor.BatchingStateRestoreCallback;
 import org.apache.kafka.streams.processor.StateRestoreCallback;
-import org.junit.Test;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -30,19 +35,22 @@ import java.util.List;
 
 import static java.util.Arrays.asList;
 import static org.apache.kafka.streams.processor.internals.StateRestoreCallbackAdapter.adapt;
-import static org.easymock.EasyMock.mock;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.core.Is.is;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
 
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.STRICT_STUBS)
 public class StateRestoreCallbackAdapterTest {
-    @Test(expected = UnsupportedOperationException.class)
+    @Test
     public void shouldThrowOnRestoreAll() {
-        adapt(mock(StateRestoreCallback.class)).restoreAll(null);
+        assertThrows(UnsupportedOperationException.class, () -> adapt(mock(StateRestoreCallback.class)).restoreAll(null));
     }
 
-    @Test(expected = UnsupportedOperationException.class)
+    @Test
     public void shouldThrowOnRestore() {
-        adapt(mock(StateRestoreCallback.class)).restore(null, null);
+        assertThrows(UnsupportedOperationException.class, () -> adapt(mock(StateRestoreCallback.class)).restore(null, null));
     }
 
     @Test
@@ -93,12 +101,12 @@ public class StateRestoreCallbackAdapterTest {
             new ConsumerRecord<>("topic2", 1, 1L, key2, value2)
         ));
 
-        assertThat(
-            actual,
-            is(asList(
+        assertEquals(
+            List.of(
                 new KeyValue<>(key1, value1),
                 new KeyValue<>(key2, value2)
-            ))
+            ),
+            actual
         );
     }
 
@@ -118,28 +126,28 @@ public class StateRestoreCallbackAdapterTest {
             new ConsumerRecord<>("topic2", 1, 1L, key2, value2)
         ));
 
-        assertThat(
-            actual,
-            is(asList(
+        assertEquals(
+            List.of(
                 new KeyValue<>(key1, value1),
                 new KeyValue<>(key2, value2)
-            ))
+            ),
+            actual
         );
     }
 
     private void validate(final List<ConsumerRecord<byte[], byte[]>> actual,
                           final List<ConsumerRecord<byte[], byte[]>> expected) {
-        assertThat(actual.size(), is(expected.size()));
+        assertEquals(expected.size(), actual.size());
         for (int i = 0; i < actual.size(); i++) {
             final ConsumerRecord<byte[], byte[]> actual1 = actual.get(i);
             final ConsumerRecord<byte[], byte[]> expected1 = expected.get(i);
-            assertThat(actual1.topic(), is(expected1.topic()));
-            assertThat(actual1.partition(), is(expected1.partition()));
-            assertThat(actual1.offset(), is(expected1.offset()));
-            assertThat(actual1.key(), is(expected1.key()));
-            assertThat(actual1.value(), is(expected1.value()));
-            assertThat(actual1.timestamp(), is(expected1.timestamp()));
-            assertThat(actual1.headers(), is(expected1.headers()));
+            assertEquals(expected1.topic(), actual1.topic());
+            assertEquals(expected1.partition(), actual1.partition());
+            assertEquals(expected1.offset(), actual1.offset());
+            assertArrayEquals(expected1.key(), actual1.key());
+            assertArrayEquals(expected1.value(), actual1.value());
+            assertEquals(expected1.timestamp(), actual1.timestamp());
+            assertEquals(expected1.headers(), actual1.headers());
         }
     }
 

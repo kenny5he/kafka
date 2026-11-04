@@ -16,15 +16,16 @@
  */
 package org.apache.kafka.clients.producer;
 
+import org.apache.kafka.common.Cluster;
+import org.apache.kafka.common.PartitionInfo;
+import org.apache.kafka.common.annotation.InterfaceAudience;
+import org.apache.kafka.common.utils.Utils;
+
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import org.apache.kafka.common.Cluster;
-import org.apache.kafka.common.PartitionInfo;
-import org.apache.kafka.common.utils.Utils;
 
 /**
  * The "Round-Robin" partitioner
@@ -34,6 +35,7 @@ import org.apache.kafka.common.utils.Utils;
  * is the behaviour regardless of record key hash. 
  *
  */
+@InterfaceAudience.Public
 public class RoundRobinPartitioner implements Partitioner {
     private final ConcurrentMap<String, AtomicInteger> topicCounterMap = new ConcurrentHashMap<>();
 
@@ -51,8 +53,6 @@ public class RoundRobinPartitioner implements Partitioner {
      */
     @Override
     public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {
-        List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
-        int numPartitions = partitions.size();
         int nextValue = nextValue(topic);
         List<PartitionInfo> availablePartitions = cluster.availablePartitionsForTopic(topic);
         if (!availablePartitions.isEmpty()) {
@@ -60,17 +60,15 @@ public class RoundRobinPartitioner implements Partitioner {
             return availablePartitions.get(part).partition();
         } else {
             // no partitions are available, give a non-available partition
+            int numPartitions = cluster.partitionsForTopic(topic).size();
             return Utils.toPositive(nextValue) % numPartitions;
         }
     }
 
     private int nextValue(String topic) {
-        AtomicInteger counter = topicCounterMap.computeIfAbsent(topic, k -> {
-            return new AtomicInteger(0);
-        });
+        AtomicInteger counter = topicCounterMap.computeIfAbsent(topic, k -> new AtomicInteger(0));
         return counter.getAndIncrement();
     }
 
     public void close() {}
-
 }

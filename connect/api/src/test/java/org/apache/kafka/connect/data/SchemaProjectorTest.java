@@ -19,18 +19,20 @@ package org.apache.kafka.connect.data;
 import org.apache.kafka.connect.data.Schema.Type;
 import org.apache.kafka.connect.errors.DataException;
 import org.apache.kafka.connect.errors.SchemaProjectorException;
-import org.junit.Test;
+
+import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class SchemaProjectorTest {
 
@@ -56,26 +58,14 @@ public class SchemaProjectorTest {
         projected = SchemaProjector.project(Schema.STRING_SCHEMA, "abc", Schema.OPTIONAL_STRING_SCHEMA);
         assertEquals("abc", projected);
 
-        try {
-            SchemaProjector.project(Schema.OPTIONAL_BOOLEAN_SCHEMA, false, Schema.BOOLEAN_SCHEMA);
-            fail("Cannot project optional schema to schema with no default value.");
-        } catch (DataException e) {
-            // expected
-        }
+        assertThrows(DataException.class, () -> SchemaProjector.project(Schema.OPTIONAL_BOOLEAN_SCHEMA, false,
+                Schema.BOOLEAN_SCHEMA), "Cannot project optional schema to schema with no default value.");
 
-        try {
-            SchemaProjector.project(Schema.OPTIONAL_BYTES_SCHEMA, bytes, Schema.BYTES_SCHEMA);
-            fail("Cannot project optional schema to schema with no default value.");
-        } catch (DataException e) {
-            // expected
-        }
+        assertThrows(DataException.class, () -> SchemaProjector.project(Schema.OPTIONAL_BYTES_SCHEMA, bytes,
+                Schema.BYTES_SCHEMA), "Cannot project optional schema to schema with no default value.");
 
-        try {
-            SchemaProjector.project(Schema.OPTIONAL_STRING_SCHEMA, "abc", Schema.STRING_SCHEMA);
-            fail("Cannot project optional schema to schema with no default value.");
-        } catch (DataException e) {
-            // expected
-        }
+        assertThrows(DataException.class, () -> SchemaProjector.project(Schema.OPTIONAL_STRING_SCHEMA, "abc",
+                Schema.STRING_SCHEMA), "Cannot project optional schema to schema with no default value.");
     }
 
     @Test
@@ -86,12 +76,12 @@ public class SchemaProjectorTest {
 
         Object[] values = {(byte) 127, (short) 255, 32767, 327890L, 1.2F, 1.2345};
         Map<Object, List<?>> expectedProjected = new HashMap<>();
-        expectedProjected.put(values[0], Arrays.asList((byte) 127, (short) 127, 127, 127L, 127.F, 127.));
-        expectedProjected.put(values[1], Arrays.asList((short) 255, 255, 255L, 255.F, 255.));
-        expectedProjected.put(values[2], Arrays.asList(32767, 32767L, 32767.F, 32767.));
-        expectedProjected.put(values[3], Arrays.asList(327890L, 327890.F, 327890.));
-        expectedProjected.put(values[4], Arrays.asList(1.2F, 1.2));
-        expectedProjected.put(values[5], Arrays.asList(1.2345));
+        expectedProjected.put(values[0], List.of((byte) 127, (short) 127, 127, 127L, 127.F, 127.));
+        expectedProjected.put(values[1], List.of((short) 255, 255, 255L, 255.F, 255.));
+        expectedProjected.put(values[2], List.of(32767, 32767L, 32767.F, 32767.));
+        expectedProjected.put(values[3], List.of(327890L, 327890.F, 327890.));
+        expectedProjected.put(values[4], List.of(1.2F, 1.2));
+        expectedProjected.put(values[5], List.of(1.2345));
 
         Object promoted;
         for (int i = 0; i < promotableSchemas.length; ++i) {
@@ -135,12 +125,9 @@ public class SchemaProjectorTest {
         for (Schema promotableSchema: promotableSchemas) {
             for (Schema nonPromotableSchema: nonPromotableSchemas) {
                 Object dummy = new Object();
-                try {
-                    SchemaProjector.project(promotableSchema, dummy, nonPromotableSchema);
-                    fail("Cannot promote " +  promotableSchema.type() + " to " + nonPromotableSchema.type());
-                } catch (DataException e) {
-                    // expected
-                }
+
+                assertThrows(DataException.class, () -> SchemaProjector.project(promotableSchema, dummy, nonPromotableSchema),
+                        "Cannot promote " +  promotableSchema.type() + " to " + nonPromotableSchema.type());
             }
         }
     }
@@ -222,7 +209,6 @@ public class SchemaProjectorTest {
 
         Struct targetStruct = (Struct) SchemaProjector.project(source, sourceStruct, target);
 
-
         assertEquals(1, (int) targetStruct.getInt32("field"));
         assertEquals(123, (int) targetStruct.getInt32("field2"));
 
@@ -231,12 +217,8 @@ public class SchemaProjectorTest {
                 .field("field2", Schema.INT32_SCHEMA)
                 .build();
 
-        try {
-            SchemaProjector.project(source, sourceStruct, incompatibleTargetSchema);
-            fail("Incompatible schema.");
-        } catch (DataException e) {
-            // expected
-        }
+        assertThrows(DataException.class, () -> SchemaProjector.project(source, sourceStruct, incompatibleTargetSchema),
+                "Incompatible schema.");
     }
 
     @Test
@@ -255,12 +237,8 @@ public class SchemaProjectorTest {
         Struct targetStruct = (Struct) SchemaProjector.project(source, sourceStruct, target);
 
         assertEquals(1, targetStruct.get("field"));
-        try {
-            targetStruct.get("field2");
-            fail("field2 is not part of the projected struct");
-        } catch (DataException e) {
-            // expected
-        }
+        assertThrows(DataException.class, () -> targetStruct.get("field2"),
+                "field2 is not part of the projected struct");
     }
 
     @Test
@@ -318,16 +296,16 @@ public class SchemaProjectorTest {
         Struct sourceNestedStruct = new Struct(sourceNestedSchema);
         sourceNestedStruct.put("first", 1);
         sourceNestedStruct.put("second", "abc");
-        sourceNestedStruct.put("array", Arrays.asList(1, 2));
-        sourceNestedStruct.put("map", Collections.singletonMap(5, "def"));
+        sourceNestedStruct.put("array", List.of(1, 2));
+        sourceNestedStruct.put("map", Map.of(5, "def"));
         sourceNestedStruct.put("nested", sourceFlatStruct);
 
         Struct targetNestedStruct = (Struct) SchemaProjector.project(sourceNestedSchema, sourceNestedStruct,
                                                                      targetNestedSchema);
         assertEquals(1, targetNestedStruct.get("first"));
         assertEquals("abc", targetNestedStruct.get("second"));
-        assertEquals(Arrays.asList(1, 2), targetNestedStruct.get("array"));
-        assertEquals(Collections.singletonMap(5, "def"), targetNestedStruct.get("map"));
+        assertEquals(List.of(1, 2), targetNestedStruct.get("array"));
+        assertEquals(Map.of(5, "def"), targetNestedStruct.get("map"));
 
         Struct projectedStruct = (Struct) targetNestedStruct.get("nested");
         assertEquals(113, projectedStruct.get("field"));
@@ -365,26 +343,14 @@ public class SchemaProjectorTest {
 
         Schema namedSchema = SchemaBuilder.int32().name("invalidLogicalTypeName").build();
         for (Schema logicalTypeSchema: logicalTypeSchemas) {
-            try {
-                SchemaProjector.project(logicalTypeSchema, null, Schema.BOOLEAN_SCHEMA);
-                fail("Cannot project logical types to non-logical types.");
-            } catch (SchemaProjectorException e) {
-                // expected
-            }
+            assertThrows(SchemaProjectorException.class, () -> SchemaProjector.project(logicalTypeSchema, null,
+                    Schema.BOOLEAN_SCHEMA), "Cannot project logical types to non-logical types.");
 
-            try {
-                SchemaProjector.project(logicalTypeSchema, null, namedSchema);
-                fail("Reader name is not a valid logical type name.");
-            } catch (SchemaProjectorException e) {
-                // expected
-            }
+            assertThrows(SchemaProjectorException.class, () -> SchemaProjector.project(logicalTypeSchema, null,
+                    namedSchema), "Reader name is not a valid logical type name.");
 
-            try {
-                SchemaProjector.project(Schema.BOOLEAN_SCHEMA, null, logicalTypeSchema);
-                fail("Cannot project non-logical types to logical types.");
-            } catch (SchemaProjectorException e) {
-                // expected
-            }
+            assertThrows(SchemaProjectorException.class, () -> SchemaProjector.project(Schema.BOOLEAN_SCHEMA,
+                    null, logicalTypeSchema), "Cannot project non-logical types to logical types.");
         }
     }
 
@@ -392,72 +358,59 @@ public class SchemaProjectorTest {
     public void testArrayProjection() {
         Schema source = SchemaBuilder.array(Schema.INT32_SCHEMA).build();
 
-        Object projected = SchemaProjector.project(source, Arrays.asList(1, 2, 3), source);
-        assertEquals(Arrays.asList(1, 2, 3), projected);
+        Object projected = SchemaProjector.project(source, List.of(1, 2, 3), source);
+        assertEquals(List.of(1, 2, 3), projected);
 
         Schema optionalSource = SchemaBuilder.array(Schema.INT32_SCHEMA).optional().build();
-        Schema target = SchemaBuilder.array(Schema.INT32_SCHEMA).defaultValue(Arrays.asList(1, 2, 3)).build();
-        projected = SchemaProjector.project(optionalSource, Arrays.asList(4, 5), target);
-        assertEquals(Arrays.asList(4, 5), projected);
+        Schema target = SchemaBuilder.array(Schema.INT32_SCHEMA).defaultValue(List.of(1, 2, 3)).build();
+        projected = SchemaProjector.project(optionalSource, List.of(4, 5), target);
+        assertEquals(List.of(4, 5), projected);
         projected = SchemaProjector.project(optionalSource, null, target);
-        assertEquals(Arrays.asList(1, 2, 3), projected);
+        assertEquals(List.of(1, 2, 3), projected);
 
-        Schema promotedTarget = SchemaBuilder.array(Schema.INT64_SCHEMA).defaultValue(Arrays.asList(1L, 2L, 3L)).build();
-        projected = SchemaProjector.project(optionalSource, Arrays.asList(4, 5), promotedTarget);
-        List<Long> expectedProjected = Arrays.asList(4L, 5L);
+        Schema promotedTarget = SchemaBuilder.array(Schema.INT64_SCHEMA).defaultValue(List.of(1L, 2L, 3L)).build();
+        projected = SchemaProjector.project(optionalSource, List.of(4, 5), promotedTarget);
+        List<Long> expectedProjected = List.of(4L, 5L);
         assertEquals(expectedProjected, projected);
         projected = SchemaProjector.project(optionalSource, null, promotedTarget);
-        assertEquals(Arrays.asList(1L, 2L, 3L), projected);
+        assertEquals(List.of(1L, 2L, 3L), projected);
 
         Schema noDefaultValueTarget = SchemaBuilder.array(Schema.INT32_SCHEMA).build();
-        try {
-            SchemaProjector.project(optionalSource, null, noDefaultValueTarget);
-            fail("Target schema does not provide a default value.");
-        } catch (SchemaProjectorException e) {
-            // expected
-        }
+        assertThrows(SchemaProjectorException.class, () -> SchemaProjector.project(optionalSource, null,
+                noDefaultValueTarget), "Target schema does not provide a default value.");
 
         Schema nonPromotableTarget = SchemaBuilder.array(Schema.BOOLEAN_SCHEMA).build();
-        try {
-            SchemaProjector.project(optionalSource, null, nonPromotableTarget);
-            fail("Neither source type matches target type nor source type can be promoted to target type");
-        } catch (SchemaProjectorException e) {
-            // expected
-        }
+        assertThrows(SchemaProjectorException.class,
+            () -> SchemaProjector.project(optionalSource, null, nonPromotableTarget),
+            "Neither source type matches target type nor source type can be promoted to target type");
     }
 
     @Test
     public void testMapProjection() {
         Schema source = SchemaBuilder.map(Schema.INT32_SCHEMA, Schema.INT32_SCHEMA).optional().build();
 
-        Schema target = SchemaBuilder.map(Schema.INT32_SCHEMA, Schema.INT32_SCHEMA).defaultValue(Collections.singletonMap(1, 2)).build();
-        Object projected = SchemaProjector.project(source, Collections.singletonMap(3, 4), target);
-        assertEquals(Collections.singletonMap(3, 4), projected);
+        Schema target = SchemaBuilder.map(Schema.INT32_SCHEMA, Schema.INT32_SCHEMA).defaultValue(Map.of(1, 2)).build();
+        Object projected = SchemaProjector.project(source, Map.of(3, 4), target);
+        assertEquals(Map.of(3, 4), projected);
         projected = SchemaProjector.project(source, null, target);
-        assertEquals(Collections.singletonMap(1, 2), projected);
+        assertEquals(Map.of(1, 2), projected);
 
         Schema promotedTarget = SchemaBuilder.map(Schema.INT64_SCHEMA, Schema.FLOAT32_SCHEMA).defaultValue(
-                Collections.singletonMap(3L, 4.5F)).build();
-        projected = SchemaProjector.project(source, Collections.singletonMap(3, 4), promotedTarget);
-        assertEquals(Collections.singletonMap(3L, 4.F), projected);
+                Map.of(3L, 4.5F)).build();
+        projected = SchemaProjector.project(source, Map.of(3, 4), promotedTarget);
+        assertEquals(Map.of(3L, 4.F), projected);
         projected = SchemaProjector.project(source, null, promotedTarget);
-        assertEquals(Collections.singletonMap(3L, 4.5F), projected);
+        assertEquals(Map.of(3L, 4.5F), projected);
 
         Schema noDefaultValueTarget = SchemaBuilder.map(Schema.INT32_SCHEMA, Schema.INT32_SCHEMA).build();
-        try {
-            SchemaProjector.project(source, null, noDefaultValueTarget);
-            fail("Reader does not provide a default value.");
-        } catch (SchemaProjectorException e) {
-            // expected
-        }
+        assertThrows(SchemaProjectorException.class,
+            () -> SchemaProjector.project(source, null, noDefaultValueTarget),
+            "Reader does not provide a default value.");
 
         Schema nonPromotableTarget = SchemaBuilder.map(Schema.BOOLEAN_SCHEMA, Schema.STRING_SCHEMA).build();
-        try {
-            SchemaProjector.project(source, null, nonPromotableTarget);
-            fail("Neither source type matches target type nor source type can be promoted to target type");
-        } catch (SchemaProjectorException e) {
-            // expected
-        }
+        assertThrows(SchemaProjectorException.class,
+            () -> SchemaProjector.project(source, null, nonPromotableTarget),
+            "Neither source type matches target type nor source type can be promoted to target type");
     }
 
     @Test
@@ -465,20 +418,14 @@ public class SchemaProjectorTest {
         Schema source = SchemaBuilder.int32().name("source").build();
         Schema target = SchemaBuilder.int32().name("target").build();
 
-        try {
-            SchemaProjector.project(source, 12, target);
-            fail("Source name and target name mismatch.");
-        } catch (SchemaProjectorException e) {
-            // expected
-        }
+        assertThrows(SchemaProjectorException.class,
+            () ->  SchemaProjector.project(source, 12, target),
+            "Source name and target name mismatch.");
 
-        Schema targetWithParameters = SchemaBuilder.int32().parameters(Collections.singletonMap("key", "value"));
-        try {
-            SchemaProjector.project(source, 34, targetWithParameters);
-            fail("Source parameters and target parameters mismatch.");
-        } catch (SchemaProjectorException e) {
-            // expected
-        }
+        Schema targetWithParameters = SchemaBuilder.int32().parameters(Map.of("key", "value"));
+        assertThrows(SchemaProjectorException.class,
+            () ->  SchemaProjector.project(source, 34, targetWithParameters),
+            "Source parameters and target parameters mismatch.");
     }
 
     @Test
@@ -492,20 +439,21 @@ public class SchemaProjectorTest {
     public void testProjectMissingOptionalStructField() {
         final Schema source = SchemaBuilder.struct().build();
         final Schema target = SchemaBuilder.struct().field("id", SchemaBuilder.OPTIONAL_INT64_SCHEMA).build();
-        assertEquals(null, ((Struct) SchemaProjector.project(source, new Struct(source), target)).getInt64("id"));
+        assertNull(((Struct) SchemaProjector.project(source, new Struct(source), target)).getInt64("id"));
     }
 
-    @Test(expected = SchemaProjectorException.class)
+    @Test
     public void testProjectMissingRequiredField() {
         final Schema source = SchemaBuilder.struct().build();
         final Schema target = SchemaBuilder.struct().field("id", SchemaBuilder.INT64_SCHEMA).build();
-        SchemaProjector.project(source, new Struct(source), target);
+        assertThrows(SchemaProjectorException.class, () -> SchemaProjector.project(source, new Struct(source), target));
     }
 
     private void verifyOptionalProjection(Schema source, Type targetType, Object value, Object defaultValue, Object expectedProjected, boolean optional) {
         Schema target;
-        assert source.isOptional();
-        assert value != null;
+        assertTrue(source.isOptional());
+        assertNotNull(value);
+
         if (optional) {
             target = SchemaBuilder.type(targetType).optional().defaultValue(defaultValue).build();
         } else {
@@ -520,7 +468,7 @@ public class SchemaProjectorTest {
 
         projected = SchemaProjector.project(source, null, target);
         if (optional) {
-            assertEquals(null, projected);
+            assertNull(projected);
         } else {
             assertEquals(defaultValue, projected);
         }

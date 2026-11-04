@@ -18,29 +18,45 @@
 package org.apache.kafka.common.protocol;
 
 import org.apache.kafka.common.protocol.types.RawTaggedField;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.Timeout;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.BigIntegerNode;
+import com.fasterxml.jackson.databind.node.BinaryNode;
+import com.fasterxml.jackson.databind.node.BooleanNode;
+import com.fasterxml.jackson.databind.node.DoubleNode;
+import com.fasterxml.jackson.databind.node.IntNode;
+import com.fasterxml.jackson.databind.node.LongNode;
+import com.fasterxml.jackson.databind.node.ShortNode;
+import com.fasterxml.jackson.databind.node.TextNode;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+
+import java.io.IOException;
+import java.io.StringWriter;
+import java.io.UncheckedIOException;
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Collections;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@Timeout(120)
 public final class MessageUtilTest {
-    @Rule
-    final public Timeout globalTimeout = Timeout.millis(120000);
 
     @Test
     public void testDeepToString() {
         assertEquals("[1, 2, 3]",
             MessageUtil.deepToString(Arrays.asList(1, 2, 3).iterator()));
         assertEquals("[foo]",
-            MessageUtil.deepToString(Arrays.asList("foo").iterator()));
+            MessageUtil.deepToString(Collections.singletonList("foo").iterator()));
     }
 
     @Test
@@ -53,7 +69,7 @@ public final class MessageUtilTest {
 
     @Test
     public void testDuplicate() {
-        assertEquals(null, MessageUtil.duplicate(null));
+        assertNull(MessageUtil.duplicate(null));
         assertArrayEquals(new byte[] {},
             MessageUtil.duplicate(new byte[] {}));
         assertArrayEquals(new byte[] {1, 2, 3},
@@ -77,5 +93,96 @@ public final class MessageUtilTest {
                 new RawTaggedField(2, new byte[] {})),
             Arrays.asList(new RawTaggedField(1, new byte[] {1}),
                 new RawTaggedField(2, new byte[] {}))));
+    }
+
+    @Test
+    public void testConstants() {
+        assertEquals(MessageUtil.UNSIGNED_SHORT_MAX, 0xFFFF);
+        assertEquals(MessageUtil.UNSIGNED_INT_MAX, 0xFFFFFFFFL);
+    }
+
+    @Test
+    public void testJsonNodeToInt() {
+        assertEquals(42, MessageUtil.jsonNodeToInt(new ShortNode((short) 42), "Test short"));
+        assertEquals(42, MessageUtil.jsonNodeToInt(new IntNode(42), "Test int"));
+        assertEquals(42, MessageUtil.jsonNodeToInt(new LongNode(42), "Test long"));
+
+        NumberFormatException exception = assertThrows(NumberFormatException.class,
+            () -> MessageUtil.jsonNodeToInt(new LongNode((long) Integer.MAX_VALUE + 1), "Test large long"));
+        assertEquals("Test large long: value 2147483648 does not fit in a 32-bit signed integer.",
+            exception.getMessage());
+        exception = assertThrows(NumberFormatException.class,
+            () -> MessageUtil.jsonNodeToInt(new DoubleNode(42.0), "Test double"));
+        assertEquals("Test double: expected an integer type, but got NUMBER", exception.getMessage());
+        assertThrows(NumberFormatException.class,
+            () -> MessageUtil.jsonNodeToInt(BooleanNode.TRUE, "Test boolean"));
+        assertThrows(NumberFormatException.class,
+            () -> MessageUtil.jsonNodeToInt(new TextNode("42"), "Test text"));
+    }
+
+    @Test
+    public void testJsonNodeToLong() {
+        assertEquals(42, MessageUtil.jsonNodeToLong(new ShortNode((short) 42), "Test short"));
+        assertEquals(42, MessageUtil.jsonNodeToLong(new IntNode(42), "Test int"));
+        assertEquals(42, MessageUtil.jsonNodeToLong(new LongNode(42), "Test long"));
+        assertEquals(42, MessageUtil.jsonNodeToLong(
+            new BigIntegerNode(BigInteger.valueOf(42)), "Test big integer"));
+
+        NumberFormatException exception = assertThrows(NumberFormatException.class,
+            () -> MessageUtil.jsonNodeToLong(
+                new BigIntegerNode(BigInteger.valueOf(Long.MAX_VALUE).add(BigInteger.ONE)),
+                "Test large integer"));
+        assertEquals("Test large integer: value 9223372036854775808 does not fit in a 64-bit signed integer.",
+            exception.getMessage());
+        exception = assertThrows(NumberFormatException.class,
+            () -> MessageUtil.jsonNodeToLong(new DoubleNode(42.0), "Test double"));
+        assertEquals("Test double: expected an integer type, but got NUMBER", exception.getMessage());
+        assertThrows(NumberFormatException.class,
+            () -> MessageUtil.jsonNodeToLong(BooleanNode.TRUE, "Test boolean"));
+        assertThrows(NumberFormatException.class,
+            () -> MessageUtil.jsonNodeToLong(new TextNode("42"), "Test text"));
+    }
+
+    @Test
+    public void testBinaryNode() throws IOException {
+        byte[] expected = new byte[] {5, 2, 9, 4, 1, 8, 7, 0, 3, 6};
+        StringWriter writer = new StringWriter();
+        ObjectMapper mapper = new ObjectMapper();
+
+        mapper.writeTree(mapper.createGenerator(writer), new BinaryNode(expected));
+
+        JsonNode textNode = mapper.readTree(writer.toString());
+
+        assertTrue(textNode.isTextual(), String.format("Expected a JSON string but was: %s", textNode));
+        byte[] actual = MessageUtil.jsonNodeToBinary(textNode, "Test base64 JSON string");
+        assertArrayEquals(expected, actual);
+    }
+
+    @Test
+    public void testInvalidBinaryNode() {
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> MessageUtil.jsonNodeToBinary(new IntNode(42), "Test int to binary")
+        );
+        assertThrows(
+            UncheckedIOException.class,
+            () -> MessageUtil.jsonNodeToBinary(new TextNode("This is not base64!"), "Test non-base64 to binary")
+        );
+    }
+
+    @Test
+    public void testMaxArrayLength() {
+        assertEquals(MessageUtil.MAX_ARRAY_LENGTH, MessageUtil.maxArrayLength());
+        try {
+            MessageUtil.setMaxArrayLength(1);
+            assertEquals(1, MessageUtil.maxArrayLength());
+            MessageUtil.setMaxArrayLength(Integer.MAX_VALUE);
+            assertEquals(Integer.MAX_VALUE, MessageUtil.maxArrayLength());
+            assertThrows(IllegalArgumentException.class, () -> MessageUtil.setMaxArrayLength(0));
+            assertThrows(IllegalArgumentException.class, () -> MessageUtil.setMaxArrayLength(-1));
+            assertEquals(Integer.MAX_VALUE, MessageUtil.maxArrayLength());
+        } finally {
+            MessageUtil.setMaxArrayLength(MessageUtil.MAX_ARRAY_LENGTH);
+        }
     }
 }

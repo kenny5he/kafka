@@ -20,9 +20,9 @@ import org.apache.kafka.common.message.DeleteGroupsResponseData;
 import org.apache.kafka.common.message.DeleteGroupsResponseData.DeletableGroupResult;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
-import org.apache.kafka.common.protocol.types.Struct;
+import org.apache.kafka.common.protocol.Readable;
 
-import java.nio.ByteBuffer;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -39,24 +39,16 @@ import java.util.Map;
  */
 public class DeleteGroupsResponse extends AbstractResponse {
 
-    public final DeleteGroupsResponseData data;
+    private final DeleteGroupsResponseData data;
 
     public DeleteGroupsResponse(DeleteGroupsResponseData data) {
+        super(ApiKeys.DELETE_GROUPS);
         this.data = data;
     }
 
-    public DeleteGroupsResponse(Struct struct) {
-        short latestVersion = (short) (DeleteGroupsResponseData.SCHEMAS.length - 1);
-        this.data = new DeleteGroupsResponseData(struct, latestVersion);
-    }
-
-    public DeleteGroupsResponse(Struct struct, short version) {
-        this.data = new DeleteGroupsResponseData(struct, version);
-    }
-
     @Override
-    protected Struct toStruct(short version) {
-        return data.toStruct(version);
+    public DeleteGroupsResponseData data() {
+        return data;
     }
 
     public Map<String, Errors> errors() {
@@ -77,15 +69,15 @@ public class DeleteGroupsResponse extends AbstractResponse {
 
     @Override
     public Map<Errors, Integer> errorCounts() {
-        Map<Errors, Integer> counts = new HashMap<>();
+        Map<Errors, Integer> counts = new EnumMap<>(Errors.class);
         data.results().forEach(result ->
             updateErrorCounts(counts, Errors.forCode(result.errorCode()))
         );
         return counts;
     }
 
-    public static DeleteGroupsResponse parse(ByteBuffer buffer, short version) {
-        return new DeleteGroupsResponse(ApiKeys.DELETE_GROUPS.parseResponse(version, buffer), version);
+    public static DeleteGroupsResponse parse(Readable readable, short version) {
+        return new DeleteGroupsResponse(new DeleteGroupsResponseData(readable, version));
     }
 
     @Override
@@ -94,7 +86,8 @@ public class DeleteGroupsResponse extends AbstractResponse {
     }
 
     @Override
-    public boolean shouldClientThrottle(short version) {
-        return version >= 1;
+    public void maybeSetThrottleTimeMs(int throttleTimeMs) {
+        data.setThrottleTimeMs(throttleTimeMs);
     }
+
 }

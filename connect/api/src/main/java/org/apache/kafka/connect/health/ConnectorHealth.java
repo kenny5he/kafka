@@ -16,6 +16,8 @@
  */
 package org.apache.kafka.connect.health;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
+import org.apache.kafka.common.utils.Utils;
 
 import java.util.Map;
 import java.util.Objects;
@@ -23,6 +25,7 @@ import java.util.Objects;
 /**
  * Provides basic health information about the connector and its tasks.
  */
+@InterfaceAudience.Public
 public class ConnectorHealth {
 
     private final String name;
@@ -35,7 +38,7 @@ public class ConnectorHealth {
                            ConnectorState connectorState,
                            Map<Integer, TaskState> tasks,
                            ConnectorType type) {
-        if (name == null || name.trim().isEmpty()) {
+        if (Utils.isBlank(name)) {
             throw new IllegalArgumentException("Connector name is required");
         }
         Objects.requireNonNull(connectorState, "connectorState can't be null");

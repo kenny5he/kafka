@@ -17,8 +17,8 @@
 package org.apache.kafka.common.security.ssl;
 
 import java.io.IOException;
-import java.util.List;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -135,12 +135,14 @@ public class SslPrincipalMapper {
             final Matcher m = pattern.matcher(distinguishedName);
 
             if (m.matches()) {
-                result = distinguishedName.replaceAll(pattern.pattern(), escapeLiteralBackReferences(replacement, m.groupCount()));
+                final StringBuilder sb = new StringBuilder();
+                m.appendReplacement(sb, escapeLiteralBackReferences(replacement, m.groupCount()));
+                result = sb.toString();
             }
 
             if (toLowerCase && result != null) {
                 result = result.toLowerCase(Locale.ENGLISH);
-            } else if (toUpperCase & result != null) {
+            } else if (toUpperCase && result != null) {
                 result = result.toUpperCase(Locale.ENGLISH);
             }
 
@@ -163,8 +165,7 @@ public class SslPrincipalMapper {
                 if (backRefNum.startsWith("0")) {
                     continue;
                 }
-                final int originalBackRefIndex = Integer.parseInt(backRefNum);
-                int backRefIndex = originalBackRefIndex;
+                int backRefIndex = Integer.parseInt(backRefNum);
 
 
                 // if we have a replacement value like $123, and we have less than 123 capturing groups, then
@@ -179,7 +180,7 @@ public class SslPrincipalMapper {
                     final StringBuilder sb = new StringBuilder(value.length() + 1);
                     final int groupStart = backRefMatcher.start(1);
 
-                    sb.append(value.substring(0, groupStart - 1));
+                    sb.append(value, 0, groupStart - 1);
                     sb.append("\\");
                     sb.append(value.substring(groupStart - 1));
                     value = sb.toString();

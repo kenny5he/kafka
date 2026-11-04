@@ -16,10 +16,10 @@
  */
 package org.apache.kafka.common.security.ssl;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class SslPrincipalMapperTest {
 
@@ -56,11 +56,7 @@ public class SslPrincipalMapperTest {
     }
 
     private void testInvalidRule(String rules) {
-        try {
-            System.out.println(SslPrincipalMapper.fromRules(rules));
-            fail("should have thrown IllegalArgumentException");
-        } catch (IllegalArgumentException e) {
-        }
+        assertThrows(IllegalArgumentException.class, () -> SslPrincipalMapper.fromRules(rules));
     }
 
     @Test
@@ -124,5 +120,29 @@ public class SslPrincipalMapperTest {
 
         SslPrincipalMapper mapper = SslPrincipalMapper.fromRules(rules);
         assertEquals("Tkac\\, Adam", mapper.getName("CN=Tkac\\, Adam,OU=ITZ,DC=geodis,DC=cz"));
+    }
+
+    @Test
+    public void testNameDerivedFromFullMatchWithAlternation() throws Exception {
+        SslPrincipalMapper mapper = SslPrincipalMapper.fromRules("RULE:CN=([^,]+),O=corp|CN=([^,]+),O=corp,C=US/$2/, DEFAULT");
+        assertEquals("bob", mapper.getName("CN=bob,O=corp,C=US"));
+    }
+
+    @Test
+    public void testNameDerivedFromFullMatchWithUnanchoredPattern() throws Exception {
+        SslPrincipalMapper mapper = SslPrincipalMapper.fromRules("RULE:CN=(.*?),OU=(.*?)/$1/, DEFAULT");
+        assertEquals("bob", mapper.getName("CN=bob,OU=eng"));
+    }
+
+    @Test
+    public void testReplacementAppliedOnce() throws Exception {
+        SslPrincipalMapper mapper = SslPrincipalMapper.fromRules("RULE:(.*)/$1@EXAMPLE.COM/, DEFAULT");
+        assertEquals("CN=bob@EXAMPLE.COM", mapper.getName("CN=bob"));
+    }
+
+    @Test
+    public void testRuleProducingEmptyNameStillMatches() throws Exception {
+        SslPrincipalMapper mapper = SslPrincipalMapper.fromRules("RULE:^.*[Cc][Nn]=([a-zA-Z0-9.]*).*$/$1/L, DEFAULT");
+        assertEquals("", mapper.getName("CN=_svc,OU=Eng,O=Corp"));
     }
 }

@@ -17,21 +17,21 @@
 
 package org.apache.kafka.common.config;
 
-import java.util.Arrays;
-import java.util.Collections;
+import org.apache.kafka.common.annotation.InterfaceAudience;
+
 import java.util.List;
 import java.util.Locale;
 
 /**
  * Describes whether the server should require or request client authentication.
  */
+@InterfaceAudience.Public
 public enum SslClientAuth {
     REQUIRED,
     REQUESTED,
     NONE;
 
-    public static final List<SslClientAuth> VALUES =
-        Collections.unmodifiableList(Arrays.asList(SslClientAuth.values()));
+    public static final List<SslClientAuth> VALUES = List.of(SslClientAuth.values());
 
     public static SslClientAuth forConfig(String key) {
         if (key == null) {
@@ -44,5 +44,10 @@ public enum SslClientAuth {
             }
         }
         return null;
+    }
+
+    @Override
+    public String toString() {
+        return super.toString().toLowerCase(Locale.ROOT);
     }
 }

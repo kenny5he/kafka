@@ -16,19 +16,26 @@
  */
 package org.apache.kafka.connect.mirror;
 
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.annotation.InterfaceAudience;
+import org.apache.kafka.common.annotation.SuppressKafkaInternalApiUsage;
+import org.apache.kafka.common.errors.UnsupportedVersionException;
 import org.apache.kafka.common.protocol.types.Field;
 import org.apache.kafka.common.protocol.types.Schema;
 import org.apache.kafka.common.protocol.types.Struct;
 import org.apache.kafka.common.protocol.types.Type;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 
-import java.util.Map;
-import java.util.HashMap;
 import java.nio.ByteBuffer;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
 
-/** Checkpoint records emitted from MirrorCheckpointConnector. Encodes remote consumer group state. */
+/**
+ * Checkpoint records emitted by MirrorCheckpointConnector.
+ */
+@InterfaceAudience.Public
 public class Checkpoint {
     public static final String TOPIC_KEY = "topic";
     public static final String PARTITION_KEY = "partition";
@@ -39,24 +46,27 @@ public class Checkpoint {
     public static final String VERSION_KEY = "version";
     public static final short VERSION = 0;
 
+    @SuppressKafkaInternalApiUsage("KIP-1265: public field exposes internal Schema type for the historical MirrorMaker wire format — pending KIP review to promote the type or refactor")
     public static final Schema VALUE_SCHEMA_V0 = new Schema(
             new Field(UPSTREAM_OFFSET_KEY, Type.INT64),
             new Field(DOWNSTREAM_OFFSET_KEY, Type.INT64),
             new Field(METADATA_KEY, Type.STRING));
 
+    @SuppressKafkaInternalApiUsage("KIP-1265: public field exposes internal Schema type for the historical MirrorMaker wire format — pending KIP review to promote the type or refactor")
     public static final Schema KEY_SCHEMA = new Schema(
             new Field(CONSUMER_GROUP_ID_KEY, Type.STRING),
             new Field(TOPIC_KEY, Type.STRING),
             new Field(PARTITION_KEY, Type.INT32));
 
+    @SuppressKafkaInternalApiUsage("KIP-1265: public field exposes internal Schema type for the historical MirrorMaker wire format — pending KIP review to promote the type or refactor")
     public static final Schema HEADER_SCHEMA = new Schema(
             new Field(VERSION_KEY, Type.INT16));
 
-    private String consumerGroupId;
-    private TopicPartition topicPartition;
-    private long upstreamOffset;
-    private long downstreamOffset;
-    private String metadata;
+    private final String consumerGroupId;
+    private final TopicPartition topicPartition;
+    private final long upstreamOffset;
+    private final long downstreamOffset;
+    private final String metadata;
 
     public Checkpoint(String consumerGroupId, TopicPartition topicPartition, long upstreamOffset,
             long downstreamOffset, String metadata) {
@@ -94,7 +104,7 @@ public class Checkpoint {
     @Override
     public String toString() {
         return String.format("Checkpoint{consumerGroupId=%s, topicPartition=%s, "
-            + "upstreamOffset=%d, downstreamOffset=%d, metatadata=%s}",
+            + "upstreamOffset=%d, downstreamOffset=%d, metadata=%s}",
             consumerGroupId, topicPartition, upstreamOffset, downstreamOffset, metadata);
     }
 
@@ -135,7 +145,9 @@ public class Checkpoint {
     }
 
     private static Schema valueSchema(short version) {
-        assert version == 0;
+        if (version != VERSION) {
+            throw new UnsupportedVersionException("Unsupported version " + version);
+        }
         return VALUE_SCHEMA_V0;
     }
 
@@ -180,5 +192,17 @@ public class Checkpoint {
     byte[] recordValue() {
         return serializeValue(VERSION).array();
     }
-};
 
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        Checkpoint that = (Checkpoint) o;
+        return upstreamOffset == that.upstreamOffset && downstreamOffset == that.downstreamOffset && Objects.equals(consumerGroupId, that.consumerGroupId) && Objects.equals(topicPartition, that.topicPartition) && Objects.equals(metadata, that.metadata);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(consumerGroupId, topicPartition, upstreamOffset, downstreamOffset, metadata);
+    }
+}

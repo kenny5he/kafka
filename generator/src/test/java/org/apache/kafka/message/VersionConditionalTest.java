@@ -17,27 +17,25 @@
 
 package org.apache.kafka.message;
 
-import org.junit.Assert;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.Timeout;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.io.StringWriter;
 
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@Timeout(120)
 public class VersionConditionalTest {
-    @Rule
-    final public Timeout globalTimeout = Timeout.millis(120000);
 
-    static void assertEquals(CodeBuffer buffer, String... lines) throws Exception {
+    static void claimEquals(CodeBuffer buffer, String... lines) throws Exception {
         StringWriter stringWriter = new StringWriter();
         buffer.write(stringWriter);
         StringBuilder expectedStringBuilder = new StringBuilder();
         for (String line : lines) {
             expectedStringBuilder.append(String.format(line));
         }
-        Assert.assertEquals(expectedStringBuilder.toString(), stringWriter.toString());
+        assertEquals(expectedStringBuilder.toString(), stringWriter.toString());
     }
 
     @Test
@@ -45,14 +43,10 @@ public class VersionConditionalTest {
         CodeBuffer buffer = new CodeBuffer();
         VersionConditional.
             forVersions(Versions.parse("1-2", null), Versions.parse("3+", null)).
-            ifMember(__ -> {
-                buffer.printf("System.out.println(\"hello world\");%n");
-            }).
-            ifNotMember(__ -> {
-                buffer.printf("System.out.println(\"foobar\");%n");
-            }).
+            ifMember(__ -> buffer.printf("System.out.println(\"hello world\");%n")).
+            ifNotMember(__ -> buffer.printf("System.out.println(\"foobar\");%n")).
             generate(buffer);
-        assertEquals(buffer,
+        claimEquals(buffer,
             "System.out.println(\"foobar\");%n");
     }
 
@@ -61,29 +55,21 @@ public class VersionConditionalTest {
         CodeBuffer buffer = new CodeBuffer();
         VersionConditional.
             forVersions(Versions.parse("3+", null), Versions.parse("1-2", null)).
-            ifMember(__ -> {
-                buffer.printf("System.out.println(\"hello world\");%n");
-            }).
-            ifNotMember(__ -> {
-                buffer.printf("System.out.println(\"foobar\");%n");
-            }).
+            ifMember(__ -> buffer.printf("System.out.println(\"hello world\");%n")).
+            ifNotMember(__ -> buffer.printf("System.out.println(\"foobar\");%n")).
             generate(buffer);
-        assertEquals(buffer,
+        claimEquals(buffer,
             "System.out.println(\"foobar\");%n");
     }
 
     @Test
-    public void testAllowMembershipCheckAlwaysFalseFails() throws Exception {
+    public void testAllowMembershipCheckAlwaysFalseFails() {
         try {
             CodeBuffer buffer = new CodeBuffer();
             VersionConditional.
                 forVersions(Versions.parse("1-2", null), Versions.parse("3+", null)).
-                ifMember(__ -> {
-                    buffer.printf("System.out.println(\"hello world\");%n");
-                }).
-                ifNotMember(__ -> {
-                    buffer.printf("System.out.println(\"foobar\");%n");
-                }).
+                ifMember(__ -> buffer.printf("System.out.println(\"hello world\");%n")).
+                ifNotMember(__ -> buffer.printf("System.out.println(\"foobar\");%n")).
                 allowMembershipCheckAlwaysFalse(false).
                 generate(buffer);
         } catch (RuntimeException e) {
@@ -96,15 +82,11 @@ public class VersionConditionalTest {
         CodeBuffer buffer = new CodeBuffer();
         VersionConditional.
             forVersions(Versions.parse("1-5", null), Versions.parse("2-4", null)).
-            ifMember(__ -> {
-                buffer.printf("System.out.println(\"hello world\");%n");
-            }).
-            ifNotMember(__ -> {
-                buffer.printf("System.out.println(\"foobar\");%n");
-            }).
+            ifMember(__ -> buffer.printf("System.out.println(\"hello world\");%n")).
+            ifNotMember(__ -> buffer.printf("System.out.println(\"foobar\");%n")).
             allowMembershipCheckAlwaysFalse(false).
             generate(buffer);
-        assertEquals(buffer,
+        claimEquals(buffer,
             "System.out.println(\"hello world\");%n");
     }
 
@@ -113,15 +95,11 @@ public class VersionConditionalTest {
         CodeBuffer buffer = new CodeBuffer();
         VersionConditional.
             forVersions(Versions.parse("1-5", null), Versions.parse("2-4", null)).
-            ifMember(__ -> {
-                buffer.printf("System.out.println(\"hello world\");%n");
-            }).
-            ifNotMember(__ -> {
-                buffer.printf("System.out.println(\"foobar\");%n");
-            }).
+            ifMember(__ -> buffer.printf("System.out.println(\"hello world\");%n")).
+            ifNotMember(__ -> buffer.printf("System.out.println(\"foobar\");%n")).
             alwaysEmitBlockScope(true).
             generate(buffer);
-        assertEquals(buffer,
+        claimEquals(buffer,
             "{%n",
             "    System.out.println(\"hello world\");%n",
             "}%n");
@@ -132,14 +110,10 @@ public class VersionConditionalTest {
         CodeBuffer buffer = new CodeBuffer();
         VersionConditional.
             forVersions(Versions.parse("1+", null), Versions.parse("0-100", null)).
-            ifMember(__ -> {
-                buffer.printf("System.out.println(\"hello world\");%n");
-            }).
-            ifNotMember(__ -> {
-                buffer.printf("System.out.println(\"foobar\");%n");
-            }).
+            ifMember(__ -> buffer.printf("System.out.println(\"hello world\");%n")).
+            ifNotMember(__ -> buffer.printf("System.out.println(\"foobar\");%n")).
             generate(buffer);
-        assertEquals(buffer,
+        claimEquals(buffer,
             "if (_version >= 1) {%n",
             "    System.out.println(\"hello world\");%n",
             "} else {%n",
@@ -152,11 +126,9 @@ public class VersionConditionalTest {
         CodeBuffer buffer = new CodeBuffer();
         VersionConditional.
             forVersions(Versions.parse("1+", null), Versions.parse("0-100", null)).
-            ifMember(__ -> {
-                buffer.printf("System.out.println(\"hello world\");%n");
-            }).
+            ifMember(__ -> buffer.printf("System.out.println(\"hello world\");%n")).
             generate(buffer);
-        assertEquals(buffer,
+        claimEquals(buffer,
             "if (_version >= 1) {%n",
             "    System.out.println(\"hello world\");%n",
             "}%n");
@@ -167,11 +139,9 @@ public class VersionConditionalTest {
         CodeBuffer buffer = new CodeBuffer();
         VersionConditional.
             forVersions(Versions.parse("1+", null), Versions.parse("0-100", null)).
-            ifNotMember(__ -> {
-                buffer.printf("System.out.println(\"hello world\");%n");
-            }).
+            ifNotMember(__ -> buffer.printf("System.out.println(\"hello world\");%n")).
             generate(buffer);
-        assertEquals(buffer,
+        claimEquals(buffer,
             "if (_version < 1) {%n",
             "    System.out.println(\"hello world\");%n",
             "}%n");
@@ -182,14 +152,10 @@ public class VersionConditionalTest {
         CodeBuffer buffer = new CodeBuffer();
         VersionConditional.
             forVersions(Versions.parse("0-10", null), Versions.parse("4+", null)).
-            ifMember(__ -> {
-                buffer.printf("System.out.println(\"hello world\");%n");
-            }).
-            ifNotMember(__ -> {
-                buffer.printf("System.out.println(\"foobar\");%n");
-            }).
+            ifMember(__ -> buffer.printf("System.out.println(\"hello world\");%n")).
+            ifNotMember(__ -> buffer.printf("System.out.println(\"foobar\");%n")).
             generate(buffer);
-        assertEquals(buffer,
+        claimEquals(buffer,
             "if (_version <= 10) {%n",
             "    System.out.println(\"hello world\");%n",
             "} else {%n",
@@ -202,11 +168,9 @@ public class VersionConditionalTest {
         CodeBuffer buffer = new CodeBuffer();
         VersionConditional.
             forVersions(Versions.parse("0-10", null), Versions.parse("4+", null)).
-            ifMember(__ -> {
-                buffer.printf("System.out.println(\"hello world\");%n");
-            }).
+            ifMember(__ -> buffer.printf("System.out.println(\"hello world\");%n")).
             generate(buffer);
-        assertEquals(buffer,
+        claimEquals(buffer,
             "if (_version <= 10) {%n",
             "    System.out.println(\"hello world\");%n",
             "}%n");
@@ -217,11 +181,9 @@ public class VersionConditionalTest {
         CodeBuffer buffer = new CodeBuffer();
         VersionConditional.
             forVersions(Versions.parse("1+", null), Versions.parse("0-100", null)).
-            ifNotMember(__ -> {
-                buffer.printf("System.out.println(\"hello world\");%n");
-            }).
+            ifNotMember(__ -> buffer.printf("System.out.println(\"hello world\");%n")).
             generate(buffer);
-        assertEquals(buffer,
+        claimEquals(buffer,
             "if (_version < 1) {%n",
             "    System.out.println(\"hello world\");%n",
             "}%n");
@@ -232,12 +194,10 @@ public class VersionConditionalTest {
         CodeBuffer buffer = new CodeBuffer();
         VersionConditional.
             forVersions(Versions.parse("5-10", null), Versions.parse("1+", null)).
-            ifMember(__ -> {
-                buffer.printf("System.out.println(\"hello world\");%n");
-            }).
+            ifMember(__ -> buffer.printf("System.out.println(\"hello world\");%n")).
             allowMembershipCheckAlwaysFalse(false).
             generate(buffer);
-        assertEquals(buffer,
+        claimEquals(buffer,
             "if ((_version >= 5) && (_version <= 10)) {%n",
             "    System.out.println(\"hello world\");%n",
             "}%n");

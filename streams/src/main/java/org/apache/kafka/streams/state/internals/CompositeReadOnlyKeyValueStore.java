@@ -16,6 +16,8 @@
  */
 package org.apache.kafka.streams.state.internals;
 
+import org.apache.kafka.common.IsolationLevel;
+import org.apache.kafka.common.serialization.Serializer;
 import org.apache.kafka.streams.errors.InvalidStateStoreException;
 import org.apache.kafka.streams.state.KeyValueIterator;
 import org.apache.kafka.streams.state.QueryableStoreType;
@@ -23,6 +25,7 @@ import org.apache.kafka.streams.state.ReadOnlyKeyValueStore;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 /**
  * A wrapper over the underlying {@link ReadOnlyKeyValueStore}s found in a {@link
@@ -36,20 +39,35 @@ public class CompositeReadOnlyKeyValueStore<K, V> implements ReadOnlyKeyValueSto
     private final StateStoreProvider storeProvider;
     private final QueryableStoreType<ReadOnlyKeyValueStore<K, V>> storeType;
     private final String storeName;
+    private final IsolationLevel isolationOverride;
 
     public CompositeReadOnlyKeyValueStore(final StateStoreProvider storeProvider,
                                           final QueryableStoreType<ReadOnlyKeyValueStore<K, V>> storeType,
                                           final String storeName) {
+        this(storeProvider, storeType, storeName, null);
+    }
+
+    private CompositeReadOnlyKeyValueStore(final StateStoreProvider storeProvider,
+                                           final QueryableStoreType<ReadOnlyKeyValueStore<K, V>> storeType,
+                                           final String storeName,
+                                           final IsolationLevel isolationOverride) {
         this.storeProvider = storeProvider;
         this.storeType = storeType;
         this.storeName = storeName;
+        this.isolationOverride = isolationOverride;
+    }
+
+    @Override
+    public ReadOnlyKeyValueStore<K, V> readOnly(final IsolationLevel isolationLevel) {
+        Objects.requireNonNull(isolationLevel, "isolationLevel");
+        return new CompositeReadOnlyKeyValueStore<>(storeProvider, storeType, storeName, isolationLevel);
     }
 
 
     @Override
     public V get(final K key) {
         Objects.requireNonNull(key);
-        final List<ReadOnlyKeyValueStore<K, V>> stores = storeProvider.stores(storeName, storeType);
+        final List<ReadOnlyKeyValueStore<K, V>> stores = readOnlyStores();
         for (final ReadOnlyKeyValueStore<K, V> store : stores) {
             try {
                 final V result = store.get(key);
@@ -66,8 +84,6 @@ public class CompositeReadOnlyKeyValueStore<K, V> implements ReadOnlyKeyValueSto
 
     @Override
     public KeyValueIterator<K, V> range(final K from, final K to) {
-        Objects.requireNonNull(from);
-        Objects.requireNonNull(to);
         final NextIteratorFunction<K, V, ReadOnlyKeyValueStore<K, V>> nextIteratorFunction = new NextIteratorFunction<K, V, ReadOnlyKeyValueStore<K, V>>() {
             @Override
             public KeyValueIterator<K, V> apply(final ReadOnlyKeyValueStore<K, V> store) {
@@ -78,8 +94,48 @@ public class CompositeReadOnlyKeyValueStore<K, V> implements ReadOnlyKeyValueSto
                 }
             }
         };
-        final List<ReadOnlyKeyValueStore<K, V>> stores = storeProvider.stores(storeName, storeType);
-        return new DelegatingPeekingKeyValueIterator<>(storeName, new CompositeKeyValueIterator<>(stores.iterator(), nextIteratorFunction));
+        final List<ReadOnlyKeyValueStore<K, V>> stores = readOnlyStores();
+        return new DelegatingPeekingKeyValueIterator<>(
+            storeName,
+            new CompositeKeyValueIterator<>(stores.iterator(), nextIteratorFunction));
+    }
+
+    @Override
+    public KeyValueIterator<K, V> reverseRange(final K from, final K to) {
+        final NextIteratorFunction<K, V, ReadOnlyKeyValueStore<K, V>> nextIteratorFunction = new NextIteratorFunction<K, V, ReadOnlyKeyValueStore<K, V>>() {
+            @Override
+            public KeyValueIterator<K, V> apply(final ReadOnlyKeyValueStore<K, V> store) {
+                try {
+                    return store.reverseRange(from, to);
+                } catch (final InvalidStateStoreException e) {
+                    throw new InvalidStateStoreException("State store is not available anymore and may have been migrated to another instance; please re-discover its location from the state metadata.");
+                }
+            }
+        };
+        final List<ReadOnlyKeyValueStore<K, V>> stores = readOnlyStores();
+        return new DelegatingPeekingKeyValueIterator<>(
+            storeName,
+            new CompositeKeyValueIterator<>(stores.iterator(), nextIteratorFunction));
+    }
+
+    @Override
+    public <PS extends Serializer<P>, P> KeyValueIterator<K, V> prefixScan(final P prefix, final PS prefixKeySerializer) {
+        Objects.requireNonNull(prefix);
+        Objects.requireNonNull(prefixKeySerializer);
+        final NextIteratorFunction<K, V, ReadOnlyKeyValueStore<K, V>> nextIteratorFunction = new NextIteratorFunction<K, V, ReadOnlyKeyValueStore<K, V>>() {
+            @Override
+            public KeyValueIterator<K, V> apply(final ReadOnlyKeyValueStore<K, V> store) {
+                try {
+                    return store.prefixScan(prefix, prefixKeySerializer);
+                } catch (final InvalidStateStoreException e) {
+                    throw new InvalidStateStoreException("State store is not available anymore and may have been migrated to another instance; please re-discover its location from the state metadata.");
+                }
+            }
+        };
+        final List<ReadOnlyKeyValueStore<K, V>> stores = readOnlyStores();
+        return new DelegatingPeekingKeyValueIterator<>(
+            storeName,
+            new CompositeKeyValueIterator<>(stores.iterator(), nextIteratorFunction));
     }
 
     @Override
@@ -94,13 +150,41 @@ public class CompositeReadOnlyKeyValueStore<K, V> implements ReadOnlyKeyValueSto
                 }
             }
         };
-        final List<ReadOnlyKeyValueStore<K, V>> stores = storeProvider.stores(storeName, storeType);
-        return new DelegatingPeekingKeyValueIterator<>(storeName, new CompositeKeyValueIterator<>(stores.iterator(), nextIteratorFunction));
+        final List<ReadOnlyKeyValueStore<K, V>> stores = readOnlyStores();
+        return new DelegatingPeekingKeyValueIterator<>(
+            storeName,
+            new CompositeKeyValueIterator<>(stores.iterator(), nextIteratorFunction));
+    }
+
+    @Override
+    public KeyValueIterator<K, V> reverseAll() {
+        final NextIteratorFunction<K, V, ReadOnlyKeyValueStore<K, V>> nextIteratorFunction = new NextIteratorFunction<K, V, ReadOnlyKeyValueStore<K, V>>() {
+            @Override
+            public KeyValueIterator<K, V> apply(final ReadOnlyKeyValueStore<K, V> store) {
+                try {
+                    return store.reverseAll();
+                } catch (final InvalidStateStoreException e) {
+                    throw new InvalidStateStoreException("State store is not available anymore and may have been migrated to another instance; please re-discover its location from the state metadata.");
+                }
+            }
+        };
+        final List<ReadOnlyKeyValueStore<K, V>> stores = readOnlyStores();
+        return new DelegatingPeekingKeyValueIterator<>(
+            storeName,
+            new CompositeKeyValueIterator<>(stores.iterator(), nextIteratorFunction));
+    }
+
+    private List<ReadOnlyKeyValueStore<K, V>> readOnlyStores() {
+        final IsolationLevel level =
+            isolationOverride != null ? isolationOverride : storeProvider.defaultIsolationLevel();
+        return storeProvider.stores(storeName, storeType).stream()
+            .map(s -> s.readOnly(level))
+            .collect(Collectors.toList());
     }
 
     @Override
     public long approximateNumEntries() {
-        final List<ReadOnlyKeyValueStore<K, V>> stores = storeProvider.stores(storeName, storeType);
+        final List<ReadOnlyKeyValueStore<K, V>> stores = readOnlyStores();
         long total = 0;
         for (final ReadOnlyKeyValueStore<K, V> store : stores) {
             total += store.approximateNumEntries();
@@ -111,6 +195,4 @@ public class CompositeReadOnlyKeyValueStore<K, V> implements ReadOnlyKeyValueSto
         return total;
     }
 
-
 }
-

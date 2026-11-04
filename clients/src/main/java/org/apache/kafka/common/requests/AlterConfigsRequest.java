@@ -21,9 +21,8 @@ import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.message.AlterConfigsRequestData;
 import org.apache.kafka.common.message.AlterConfigsResponseData;
 import org.apache.kafka.common.protocol.ApiKeys;
-import org.apache.kafka.common.protocol.types.Struct;
+import org.apache.kafka.common.protocol.Readable;
 
-import java.nio.ByteBuffer;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Objects;
@@ -70,13 +69,14 @@ public class AlterConfigsRequest extends AbstractRequest {
             super(ApiKeys.ALTER_CONFIGS);
             Objects.requireNonNull(configs, "configs");
             for (Map.Entry<ConfigResource, Config> entry : configs.entrySet()) {
-                AlterConfigsRequestData.AlterConfigsResource resource = new AlterConfigsRequestData.AlterConfigsResource()
+                AlterConfigsRequestData.AlterConfigsResource resource =
+                    new AlterConfigsRequestData.AlterConfigsResource()
                         .setResourceName(entry.getKey().name())
                         .setResourceType(entry.getKey().type().id());
                 for (ConfigEntry x : entry.getValue().entries) {
                     resource.configs().add(new AlterConfigsRequestData.AlterableConfig()
-                            .setName(x.name())
-                            .setValue(x.value()));
+                                               .setName(x.name())
+                                               .setValue(x.value()));
                 }
                 this.data.resources().add(resource);
             }
@@ -87,6 +87,11 @@ public class AlterConfigsRequest extends AbstractRequest {
         public AlterConfigsRequest build(short version) {
             return new AlterConfigsRequest(data, version);
         }
+
+        @Override
+        public String toString() {
+            return maskData(data);
+        }
     }
 
     private final AlterConfigsRequestData data;
@@ -94,11 +99,6 @@ public class AlterConfigsRequest extends AbstractRequest {
     public AlterConfigsRequest(AlterConfigsRequestData data, short version) {
         super(ApiKeys.ALTER_CONFIGS, version);
         this.data = data;
-    }
-
-    public AlterConfigsRequest(Struct struct, short version) {
-        super(ApiKeys.ALTER_CONFIGS, version);
-        this.data = new AlterConfigsRequestData(struct, version);
     }
 
     public Map<ConfigResource, Config> configs() {
@@ -116,8 +116,8 @@ public class AlterConfigsRequest extends AbstractRequest {
     }
 
     @Override
-    protected Struct toStruct() {
-        return data.toStruct(version());
+    public AlterConfigsRequestData data() {
+        return data;
     }
 
     @Override
@@ -136,7 +136,23 @@ public class AlterConfigsRequest extends AbstractRequest {
 
     }
 
-    public static AlterConfigsRequest parse(ByteBuffer buffer, short version) {
-        return new AlterConfigsRequest(ApiKeys.ALTER_CONFIGS.parseRequest(version, buffer), version);
+    public static AlterConfigsRequest parse(Readable readable, short version) {
+        return new AlterConfigsRequest(new AlterConfigsRequestData(readable, version), version);
+    }
+
+    // It is not safe to print all config values
+    private static String maskData(AlterConfigsRequestData data) {
+        AlterConfigsRequestData tempData = data.duplicate();
+        tempData.resources().forEach(resource -> {
+            resource.configs().forEach(config -> {
+                config.setValue("REDACTED");
+            });
+        });
+        return tempData.toString();
+    }
+
+    @Override
+    public String toString() {
+        return maskData(data);
     }
 }

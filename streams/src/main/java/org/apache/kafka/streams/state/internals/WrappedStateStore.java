@@ -16,10 +16,20 @@
  */
 package org.apache.kafka.streams.state.internals;
 
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.streams.errors.InvalidStateStoreException;
-import org.apache.kafka.streams.processor.ProcessorContext;
 import org.apache.kafka.streams.processor.StateStore;
+import org.apache.kafka.streams.processor.StateStoreContext;
+import org.apache.kafka.streams.query.Position;
+import org.apache.kafka.streams.query.PositionBound;
+import org.apache.kafka.streams.query.Query;
+import org.apache.kafka.streams.query.QueryConfig;
+import org.apache.kafka.streams.query.QueryResult;
+import org.apache.kafka.streams.state.HeadersBytesStore;
 import org.apache.kafka.streams.state.TimestampedBytesStore;
+import org.apache.kafka.streams.state.VersionedBytesStore;
+
+import java.util.Map;
 
 /**
  * A storage engine wrapper for utilities like logging, caching, and metering.
@@ -30,7 +40,27 @@ public abstract class WrappedStateStore<S extends StateStore, K, V> implements S
         if (stateStore instanceof TimestampedBytesStore) {
             return true;
         } else if (stateStore instanceof WrappedStateStore) {
-            return isTimestamped(((WrappedStateStore) stateStore).wrapped());
+            return isTimestamped(((WrappedStateStore<?, ?, ?>) stateStore).wrapped());
+        } else {
+            return false;
+        }
+    }
+
+    public static boolean isVersioned(final StateStore stateStore) {
+        if (stateStore instanceof VersionedBytesStore) {
+            return true;
+        } else if (stateStore instanceof WrappedStateStore) {
+            return isVersioned(((WrappedStateStore<?, ?, ?>) stateStore).wrapped());
+        } else {
+            return false;
+        }
+    }
+
+    public static boolean isHeadersAware(final StateStore stateStore) {
+        if (stateStore instanceof HeadersBytesStore) {
+            return true;
+        } else if (stateStore instanceof WrappedStateStore) {
+            return isHeadersAware(((WrappedStateStore<?, ?, ?>) stateStore).wrapped());
         } else {
             return false;
         }
@@ -42,10 +72,23 @@ public abstract class WrappedStateStore<S extends StateStore, K, V> implements S
         this.wrapped = wrapped;
     }
 
+    /**
+     * Walks the wrapped-store chain rooted at this store's {@code wrapped()} until it
+     * finds an instance of {@code innerType}, or returns {@code null} if none is present.
+     */
+    public <T extends StateStore> T findInner(final Class<T> innerType) {
+        if (innerType.isInstance(wrapped)) {
+            return innerType.cast(wrapped);
+        } else if (wrapped instanceof WrappedStateStore) {
+            return ((WrappedStateStore<?, ?, ?>) wrapped).findInner(innerType);
+        } else {
+            return null;
+        }
+    }
+
     @Override
-    public void init(final ProcessorContext context,
-                     final StateStore root) {
-        wrapped.init(context, root);
+    public void init(final StateStoreContext stateStoreContext, final StateStore root) {
+        wrapped.init(stateStoreContext, root);
     }
 
     @SuppressWarnings("unchecked")
@@ -57,6 +100,21 @@ public abstract class WrappedStateStore<S extends StateStore, K, V> implements S
         }
         return false;
     }
+
+    @Override
+    public void flushCache() {
+        if (wrapped instanceof CachedStateStore) {
+            ((CachedStateStore<?, ?>) wrapped).flushCache();
+        }
+    }
+
+    @Override
+    public void clearCache() {
+        if (wrapped instanceof CachedStateStore) {
+            ((CachedStateStore<?, ?>) wrapped).clearCache();
+        }
+    }
+
 
     @Override
     public String name() {
@@ -80,13 +138,50 @@ public abstract class WrappedStateStore<S extends StateStore, K, V> implements S
     }
 
     @Override
-    public void flush() {
-        wrapped.flush();
+    public void commit(final Map<TopicPartition, Long> changelogOffsets) {
+        wrapped.commit(changelogOffsets);
+    }
+
+    @SuppressWarnings("deprecation")
+    @Override
+    public boolean managesOffsets() {
+        return wrapped.managesOffsets();
+    }
+
+    @Override
+    public Long committedOffset(final TopicPartition partition) {
+        return wrapped.committedOffset(partition);
     }
 
     @Override
     public void close() {
         wrapped.close();
+    }
+
+    @Override
+    public <R> QueryResult<R> query(final Query<R> query,
+        final PositionBound positionBound,
+        final QueryConfig config) {
+
+        final long start = config.isCollectExecutionInfo() ? System.nanoTime() : -1L;
+        final QueryResult<R> result = wrapped().query(query, positionBound, config);
+        if (config.isCollectExecutionInfo()) {
+            final long end = System.nanoTime();
+            result.addExecutionInfo(
+                "Handled in " + getClass() + " via WrappedStateStore" + " in " + (end - start)
+                    + "ns");
+        }
+        return result;
+    }
+
+    @Override
+    public long approximateNumUncommittedBytes() {
+        return wrapped.approximateNumUncommittedBytes();
+    }
+
+    @Override
+    public Position getPosition() {
+        return wrapped.getPosition();
     }
 
     public S wrapped() {

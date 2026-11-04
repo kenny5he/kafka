@@ -16,7 +16,8 @@
  */
 package org.apache.kafka.connect.header;
 
-import org.apache.kafka.common.utils.AbstractIterator;
+import org.apache.kafka.common.annotation.InterfaceAudience;
+import org.apache.kafka.common.utils.internals.AbstractIterator;
 import org.apache.kafka.connect.data.Date;
 import org.apache.kafka.connect.data.Decimal;
 import org.apache.kafka.connect.data.Schema;
@@ -42,6 +43,7 @@ import java.util.Set;
 /**
  * A basic {@link Headers} implementation.
  */
+@InterfaceAudience.Public
 public class ConnectHeaders implements Headers {
 
     private static final int EMPTY_HASH = Objects.hash(new LinkedList<>());
@@ -55,14 +57,14 @@ public class ConnectHeaders implements Headers {
         if (original == null) {
             return;
         }
-        if (original instanceof ConnectHeaders) {
-            ConnectHeaders originalHeaders = (ConnectHeaders) original;
+        if (original instanceof ConnectHeaders originalHeaders) {
             if (!originalHeaders.isEmpty()) {
                 headers = new LinkedList<>(originalHeaders.headers);
             }
         } else {
             headers = new LinkedList<>();
             for (Header header : original) {
+                Objects.requireNonNull(header, "Unable to add a null header.");
                 headers.add(header);
             }
         }
@@ -75,7 +77,7 @@ public class ConnectHeaders implements Headers {
 
     @Override
     public boolean isEmpty() {
-        return headers == null ? true : headers.isEmpty();
+        return headers == null || headers.isEmpty();
     }
 
     @Override
@@ -342,8 +344,7 @@ public class ConnectHeaders implements Headers {
         if (obj == this) {
             return true;
         }
-        if (obj instanceof Headers) {
-            Headers that = (Headers) obj;
+        if (obj instanceof Headers that) {
             Iterator<Header> thisIter = this.iterator();
             Iterator<Header> thatIter = that.iterator();
             while (thisIter.hasNext() && thatIter.hasNext()) {

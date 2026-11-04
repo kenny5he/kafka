@@ -16,9 +16,15 @@
  */
 package org.apache.kafka.common.serialization;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
 import org.apache.kafka.common.errors.SerializationException;
+import org.apache.kafka.common.header.Headers;
 
+import java.nio.ByteBuffer;
+
+@InterfaceAudience.Public
 public class IntegerDeserializer implements Deserializer<Integer> {
+    @Override
     public Integer deserialize(String topic, byte[] data) {
         if (data == null)
             return null;
@@ -32,5 +38,17 @@ public class IntegerDeserializer implements Deserializer<Integer> {
             value |= b & 0xFF;
         }
         return value;
+    }
+
+    @Override
+    public Integer deserialize(String topic, Headers headers, ByteBuffer data) {
+        if (data == null) {
+            return null;
+        }
+
+        if (data.remaining() != 4) {
+            throw new SerializationException("Size of data received by IntegerDeserializer is not 4");
+        }
+        return data.getInt(data.position());
     }
 }

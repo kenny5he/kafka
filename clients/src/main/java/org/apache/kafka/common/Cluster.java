@@ -14,7 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.kafka.common;
+
+import org.apache.kafka.common.annotation.InterfaceAudience;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
@@ -32,6 +35,7 @@ import java.util.Set;
 /**
  * An immutable representation of a subset of the nodes, topics, and partitions in the Kafka cluster.
  */
+@InterfaceAudience.Public
 public final class Cluster {
 
     private final boolean isBootstrapConfigured;
@@ -46,6 +50,8 @@ public final class Cluster {
     private final Map<Integer, List<PartitionInfo>> partitionsByNode;
     private final Map<Integer, Node> nodesById;
     private final ClusterResource clusterResource;
+    private final Map<String, Uuid> topicIds;
+    private final Map<Uuid, String> topicNames;
 
     /**
      * Create a new cluster with the given id, nodes and partitions
@@ -57,7 +63,7 @@ public final class Cluster {
                    Collection<PartitionInfo> partitions,
                    Set<String> unauthorizedTopics,
                    Set<String> internalTopics) {
-        this(clusterId, false, nodes, partitions, unauthorizedTopics, Collections.emptySet(), internalTopics, null);
+        this(clusterId, false, nodes, partitions, unauthorizedTopics, Set.of(), internalTopics, null, Map.of());
     }
 
     /**
@@ -71,7 +77,7 @@ public final class Cluster {
                    Set<String> unauthorizedTopics,
                    Set<String> internalTopics,
                    Node controller) {
-        this(clusterId, false, nodes, partitions, unauthorizedTopics, Collections.emptySet(), internalTopics, controller);
+        this(clusterId, false, nodes, partitions, unauthorizedTopics, Set.of(), internalTopics, controller, Map.of());
     }
 
     /**
@@ -86,7 +92,23 @@ public final class Cluster {
                    Set<String> invalidTopics,
                    Set<String> internalTopics,
                    Node controller) {
-        this(clusterId, false, nodes, partitions, unauthorizedTopics, invalidTopics, internalTopics, controller);
+        this(clusterId, false, nodes, partitions, unauthorizedTopics, invalidTopics, internalTopics, controller, Map.of());
+    }
+
+    /**
+     * Create a new cluster with the given id, nodes, partitions and topicIds
+     * @param nodes The nodes in the cluster
+     * @param partitions Information about a subset of the topic-partitions this cluster hosts
+     */
+    public Cluster(String clusterId,
+                   Collection<Node> nodes,
+                   Collection<PartitionInfo> partitions,
+                   Set<String> unauthorizedTopics,
+                   Set<String> invalidTopics,
+                   Set<String> internalTopics,
+                   Node controller,
+                   Map<String, Uuid> topicIds) {
+        this(clusterId, false, nodes, partitions, unauthorizedTopics, invalidTopics, internalTopics, controller, topicIds);
     }
 
     private Cluster(String clusterId,
@@ -96,7 +118,8 @@ public final class Cluster {
                     Set<String> unauthorizedTopics,
                     Set<String> invalidTopics,
                     Set<String> internalTopics,
-                    Node controller) {
+                    Node controller,
+                    Map<String, Uuid> topicIds) {
         this.isBootstrapConfigured = isBootstrapConfigured;
         this.clusterResource = new ClusterResource(clusterId);
         // make a randomized, unmodifiable copy of the nodes
@@ -165,6 +188,10 @@ public final class Cluster {
         this.partitionsByTopic = Collections.unmodifiableMap(tmpPartitionsByTopic);
         this.availablePartitionsByTopic = Collections.unmodifiableMap(tmpAvailablePartitionsByTopic);
         this.partitionsByNode = Collections.unmodifiableMap(tmpPartitionsByNode);
+        this.topicIds = Collections.unmodifiableMap(topicIds);
+        Map<Uuid, String> tmpTopicNames = new HashMap<>();
+        topicIds.forEach((key, value) -> tmpTopicNames.put(value, key));
+        this.topicNames = Collections.unmodifiableMap(tmpTopicNames);
 
         this.unauthorizedTopics = Collections.unmodifiableSet(unauthorizedTopics);
         this.invalidTopics = Collections.unmodifiableSet(invalidTopics);
@@ -176,8 +203,8 @@ public final class Cluster {
      * Create an empty cluster instance with no nodes and no topic-partitions.
      */
     public static Cluster empty() {
-        return new Cluster(null, new ArrayList<>(0), new ArrayList<>(0), Collections.emptySet(),
-            Collections.emptySet(), null);
+        return new Cluster(null, new ArrayList<>(0), new ArrayList<>(0), Set.of(),
+            Set.of(), null);
     }
 
     /**
@@ -191,7 +218,7 @@ public final class Cluster {
         for (InetSocketAddress address : addresses)
             nodes.add(new Node(nodeId--, address.getHostString(), address.getPort()));
         return new Cluster(null, true, nodes, new ArrayList<>(0),
-            Collections.emptySet(), Collections.emptySet(), Collections.emptySet(), null);
+            Set.of(), Set.of(), Set.of(), null, Map.of());
     }
 
     /**
@@ -213,9 +240,9 @@ public final class Cluster {
     }
 
     /**
-     * Get the node by the node id (or null if no such node exists)
+     * Get the node by the node id (or null if the node is not online or does not exist)
      * @param id The id of the node
-     * @return The node, or null if no such node exists
+     * @return The node, or null if the node is not online or does not exist
      */
     public Node nodeById(int id) {
         return this.nodesById.get(id);
@@ -223,13 +250,18 @@ public final class Cluster {
 
     /**
      * Get the node by node id if the replica for the given partition is online
-     * @param partition
-     * @param id
+     * @param partition The TopicPartition
+     * @param id The node id
      * @return the node
      */
     public Optional<Node> nodeIfOnline(TopicPartition partition, int id) {
         Node node = nodeById(id);
-        if (node != null && !Arrays.asList(partition(partition).offlineReplicas()).contains(node)) {
+        PartitionInfo partitionInfo = partition(partition);
+
+        if (node != null && partitionInfo != null &&
+            !Arrays.asList(partitionInfo.offlineReplicas()).contains(node) &&
+            Arrays.asList(partitionInfo.replicas()).contains(node)) {
+
             return Optional.of(node);
         } else {
             return Optional.empty();
@@ -264,7 +296,7 @@ public final class Cluster {
      * @return A list of partitions
      */
     public List<PartitionInfo> partitionsForTopic(String topic) {
-        return partitionsByTopic.getOrDefault(topic, Collections.emptyList());
+        return partitionsByTopic.getOrDefault(topic, List.of());
     }
 
     /**
@@ -283,7 +315,7 @@ public final class Cluster {
      * @return A list of partitions
      */
     public List<PartitionInfo> availablePartitionsForTopic(String topic) {
-        return availablePartitionsByTopic.getOrDefault(topic, Collections.emptyList());
+        return availablePartitionsByTopic.getOrDefault(topic, List.of());
     }
 
     /**
@@ -292,7 +324,7 @@ public final class Cluster {
      * @return A list of partitions
      */
     public List<PartitionInfo> partitionsForNode(int nodeId) {
-        return partitionsByNode.getOrDefault(nodeId, Collections.emptyList());
+        return partitionsByNode.getOrDefault(nodeId, List.of());
     }
 
     /**
@@ -327,6 +359,18 @@ public final class Cluster {
         return controller;
     }
 
+    public Collection<Uuid> topicIds() {
+        return topicIds.values();
+    }
+
+    public Uuid topicId(String topic) {
+        return topicIds.getOrDefault(topic, Uuid.ZERO_UUID);
+    }
+
+    public String topicName(Uuid topicId) {
+        return topicNames.get(topicId);
+    }
+
     @Override
     public String toString() {
         return "Cluster(id = " + clusterResource.clusterId() + ", nodes = " + this.nodes +
@@ -345,12 +389,13 @@ public final class Cluster {
                 Objects.equals(internalTopics, cluster.internalTopics) &&
                 Objects.equals(controller, cluster.controller) &&
                 Objects.equals(partitionsByTopicPartition, cluster.partitionsByTopicPartition) &&
-                Objects.equals(clusterResource, cluster.clusterResource);
+                Objects.equals(clusterResource, cluster.clusterResource) &&
+                Objects.equals(topicIds, cluster.topicIds);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(isBootstrapConfigured, nodes, unauthorizedTopics, invalidTopics, internalTopics, controller,
-                partitionsByTopicPartition, clusterResource);
+                partitionsByTopicPartition, clusterResource, topicIds);
     }
 }

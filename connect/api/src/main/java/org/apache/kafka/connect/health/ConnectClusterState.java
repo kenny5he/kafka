@@ -17,6 +17,8 @@
 
 package org.apache.kafka.connect.health;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
+
 import java.util.Collection;
 import java.util.Map;
 
@@ -26,6 +28,7 @@ import java.util.Map;
  * {@link org.apache.kafka.connect.rest.ConnectRestExtension} implementations. The Connect framework
  * provides the implementation for this interface.
  */
+@InterfaceAudience.Public
 public interface ConnectClusterState {
 
     /**
@@ -65,7 +68,7 @@ public interface ConnectClusterState {
      * Get details about the setup of the Connect cluster.
      * @return a {@link ConnectClusterDetails} object containing information about the cluster
      * @throws java.lang.UnsupportedOperationException if the default implementation has not been overridden
-     **/
+     */
     default ConnectClusterDetails clusterDetails() {
         throw new UnsupportedOperationException();
     }

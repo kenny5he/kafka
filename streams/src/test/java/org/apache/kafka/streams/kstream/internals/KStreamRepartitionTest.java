@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.streams.kstream.internals;
 
+import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.IntegerDeserializer;
 import org.apache.kafka.common.serialization.IntegerSerializer;
 import org.apache.kafka.common.serialization.Serdes;
@@ -27,6 +28,7 @@ import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.TopologyTestDriverBuilder;
 import org.apache.kafka.streams.errors.TopologyException;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.JoinWindows;
@@ -35,31 +37,37 @@ import org.apache.kafka.streams.kstream.Repartitioned;
 import org.apache.kafka.streams.processor.StreamPartitioner;
 import org.apache.kafka.streams.test.TestRecord;
 import org.apache.kafka.test.StreamsTestUtils;
-import org.easymock.EasyMock;
-import org.easymock.EasyMockRunner;
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.TreeMap;
 
-import static org.easymock.EasyMock.anyInt;
-import static org.easymock.EasyMock.anyString;
-import static org.easymock.EasyMock.eq;
-import static org.easymock.EasyMock.expect;
-import static org.easymock.EasyMock.replay;
-import static org.easymock.EasyMock.verify;
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-@RunWith(EasyMockRunner.class)
+@SuppressWarnings("deprecation")
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.STRICT_STUBS)
 public class KStreamRepartitionTest {
     private final String inputTopic = "input-topic";
 
@@ -67,7 +75,7 @@ public class KStreamRepartitionTest {
 
     private StreamsBuilder builder;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         builder = new StreamsBuilder();
     }
@@ -75,11 +83,11 @@ public class KStreamRepartitionTest {
     @Test
     public void shouldInvokePartitionerWhenSet() {
         final int[] expectedKeys = new int[]{0, 1};
-        final StreamPartitioner<Integer, String> streamPartitionerMock = EasyMock.mock(StreamPartitioner.class);
+        @SuppressWarnings("unchecked")
+        final StreamPartitioner<Integer, String> streamPartitionerMock = mock(StreamPartitioner.class);
 
-        expect(streamPartitionerMock.partition(anyString(), eq(0), eq("X0"), anyInt())).andReturn(1).times(1);
-        expect(streamPartitionerMock.partition(anyString(), eq(1), eq("X1"), anyInt())).andReturn(1).times(1);
-        replay(streamPartitionerMock);
+        when(streamPartitionerMock.partitions(anyString(), eq(0), eq("X0"), any(Headers.class), anyInt())).thenReturn(Optional.of(Collections.singleton(1)));
+        when(streamPartitionerMock.partitions(anyString(), eq(1), eq("X1"), any(Headers.class), anyInt())).thenReturn(Optional.of(Collections.singleton(1)));
 
         final String repartitionOperationName = "test";
         final Repartitioned<Integer, String> repartitioned = Repartitioned
@@ -89,7 +97,7 @@ public class KStreamRepartitionTest {
         builder.<Integer, String>stream(inputTopic)
             .repartition(repartitioned);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<Integer, String> testInputTopic = driver.createInputTopic(inputTopic,
                                                                                            new IntegerSerializer(),
                                                                                            new StringSerializer());
@@ -106,12 +114,13 @@ public class KStreamRepartitionTest {
                 testInputTopic.pipeInput(expectedKeys[i], "X" + expectedKeys[i], i + 10);
             }
 
-            assertThat(testOutputTopic.readRecord(), equalTo(new TestRecord<>(0, "X0", Instant.ofEpochMilli(10))));
-            assertThat(testOutputTopic.readRecord(), equalTo(new TestRecord<>(1, "X1", Instant.ofEpochMilli(11))));
+            assertEquals(new TestRecord<>(0, "X0", Instant.ofEpochMilli(10)), testOutputTopic.readRecord());
+            assertEquals(new TestRecord<>(1, "X1", Instant.ofEpochMilli(11)), testOutputTopic.readRecord());
             assertTrue(testOutputTopic.readRecordsToList().isEmpty());
         }
 
-        verify(streamPartitionerMock);
+        verify(streamPartitionerMock).partitions(anyString(), eq(0), eq("X0"), any(Headers.class), anyInt());
+        verify(streamPartitionerMock).partitions(anyString(), eq(1), eq("X1"), any(Headers.class), anyInt());
     }
 
     @Test

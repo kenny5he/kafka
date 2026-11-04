@@ -20,22 +20,21 @@ package org.apache.kafka.common.network;
  * Transport layer for PLAINTEXT communication
  */
 
+import org.apache.kafka.common.security.auth.KafkaPrincipal;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.channels.SocketChannel;
 import java.nio.channels.SelectionKey;
-
+import java.nio.channels.SocketChannel;
 import java.security.Principal;
-
-import org.apache.kafka.common.security.auth.KafkaPrincipal;
 
 public class PlaintextTransportLayer implements TransportLayer {
     private final SelectionKey key;
     private final SocketChannel socketChannel;
     private final Principal principal = KafkaPrincipal.ANONYMOUS;
 
-    public PlaintextTransportLayer(SelectionKey key) throws IOException {
+    public PlaintextTransportLayer(SelectionKey key) {
         this.key = key;
         this.socketChannel = (SocketChannel) key.channel();
     }
@@ -210,6 +209,12 @@ public class PlaintextTransportLayer implements TransportLayer {
         return false;
     }
 
+    /**
+     * Transfers bytes from `fileChannel` without copying them, where possible with a single system call that reads
+     * the file and writes the socket. That call fails with the same IOException whether the file could not be read or
+     * the socket could not be written to, so this channel cannot tell the two apart:
+     * {@link #distinguishesFileReadFailures()} is false.
+     */
     @Override
     public long transferFrom(FileChannel fileChannel, long position, long count) throws IOException {
         return fileChannel.transferTo(position, count, socketChannel);

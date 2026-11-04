@@ -14,7 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.kafka.common;
+
+import org.apache.kafka.common.annotation.InterfaceAudience;
 
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -28,11 +31,12 @@ import java.util.Set;
  * specified values. The order of the tags is maintained, if an ordered set
  * is provided, so that the mBean names can be compared and sorted lexicographically.
  */
+@InterfaceAudience.Public
 public class MetricNameTemplate {
     private final String name;
     private final String group;
     private final String description;
-    private LinkedHashSet<String> tags;
+    private final LinkedHashSet<String> tags;
 
     /**
      * Create a new template. Note that the order of the tags will be preserved if the supplied

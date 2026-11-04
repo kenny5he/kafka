@@ -14,12 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.kafka.connect.mirror;
 
-/** Directional pair of clustes, where source is replicated to target. */
+import org.apache.kafka.common.annotation.InterfaceAudience;
+
+/**
+ * Directional pair of clusters, where source is mirrored to target.
+ */
+@InterfaceAudience.Public
 public class SourceAndTarget {
-    private String source;
-    private String target;
+    private final String source;
+    private final String target;
 
     public SourceAndTarget(String source, String target) {
         this.source = source;
@@ -46,7 +52,6 @@ public class SourceAndTarget {
 
     @Override
     public boolean equals(Object other) {
-        return other != null && toString().equals(other.toString());
+        return other instanceof SourceAndTarget && toString().equals(other.toString());
     }
 }
-

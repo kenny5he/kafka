@@ -19,22 +19,26 @@ package org.apache.kafka.streams.kstream.internals;
 import org.apache.kafka.common.serialization.IntegerSerializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringSerializer;
-import org.apache.kafka.streams.KeyValueTimestamp;
-import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.KeyValue;
+import org.apache.kafka.streams.KeyValueTimestamp;
 import org.apache.kafka.streams.StreamsBuilder;
-import org.apache.kafka.streams.TopologyTestDriver;
-import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.TestInputTopic;
-import org.apache.kafka.test.MockProcessorSupplier;
+import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.TopologyTestDriverBuilder;
+import org.apache.kafka.streams.kstream.Consumed;
+import org.apache.kafka.streams.kstream.KStream;
+import org.apache.kafka.streams.processor.api.Record;
+import org.apache.kafka.test.MockApiProcessorSupplier;
 import org.apache.kafka.test.StreamsTestUtils;
-import org.junit.Test;
+
+import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Properties;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class KStreamMapTest {
     private final Properties props = StreamsTestUtils.getStreamsConfig(Serdes.Integer(), Serdes.String());
@@ -45,11 +49,11 @@ public class KStreamMapTest {
         final String topicName = "topic";
         final int[] expectedKeys = new int[] {0, 1, 2, 3};
 
-        final MockProcessorSupplier<String, Integer> supplier = new MockProcessorSupplier<>();
+        final MockApiProcessorSupplier<String, Integer, Void, Void> supplier = new MockApiProcessorSupplier<>();
         final KStream<Integer, String> stream = builder.stream(topicName, Consumed.with(Serdes.Integer(), Serdes.String()));
         stream.map((key, value) -> KeyValue.pair(value, key)).process(supplier);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             for (final int expectedKey : expectedKeys) {
                 final TestInputTopic<Integer, String> inputTopic =
                         driver.createInputTopic(topicName, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
@@ -61,10 +65,18 @@ public class KStreamMapTest {
             new KeyValueTimestamp<>("V1", 1, 9),
             new KeyValueTimestamp<>("V2", 2, 8),
             new KeyValueTimestamp<>("V3", 3, 7)};
-        assertEquals(4, supplier.theCapturedProcessor().processed.size());
+        assertEquals(4, supplier.theCapturedProcessor().processed().size());
         for (int i = 0; i < expected.length; i++) {
-            assertEquals(expected[i], supplier.theCapturedProcessor().processed.get(i));
+            assertEquals(expected[i], supplier.theCapturedProcessor().processed().get(i));
         }
+    }
+
+    @Test
+    public void testKeyValueMapperResultNotNull() {
+        final KStreamMap<String, Integer, String, Integer> supplier = new KStreamMap<>((key, value) -> null);
+        final Throwable throwable = assertThrows(NullPointerException.class,
+                () -> supplier.get().process(new Record<>("K", 0, 0L)));
+        assertEquals("The provided KeyValueMapper returned null which is not allowed.", throwable.getMessage());
     }
 
     @Test

@@ -22,7 +22,9 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.TopologyTestDriverBuilder;
 import org.apache.kafka.streams.errors.TopologyException;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Grouped;
@@ -32,23 +34,22 @@ import org.apache.kafka.streams.kstream.KeyValueMapper;
 import org.apache.kafka.streams.kstream.Materialized;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.state.ValueAndTimestamp;
-import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.test.MockAggregator;
+import org.apache.kafka.test.MockApiProcessorSupplier;
 import org.apache.kafka.test.MockInitializer;
 import org.apache.kafka.test.MockMapper;
-import org.apache.kafka.test.MockProcessorSupplier;
 import org.apache.kafka.test.MockReducer;
 import org.apache.kafka.test.StreamsTestUtils;
-import org.junit.Before;
-import org.junit.Test;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 import java.util.Properties;
 
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class KGroupedTableImplTest {
 
@@ -58,75 +59,75 @@ public class KGroupedTableImplTest {
     private final Properties props = StreamsTestUtils.getStreamsConfig(Serdes.String(), Serdes.Integer());
     private final String topic = "input";
 
-    @Before
+    @BeforeEach
     public void before() {
         groupedTable = builder
             .table("blah", Consumed.with(Serdes.String(), Serdes.String()))
             .groupBy(MockMapper.selectValueKeyValueMapper());
     }
 
-    @Test(expected = TopologyException.class)
+    @Test
     public void shouldNotAllowInvalidStoreNameOnAggregate() {
-        groupedTable.aggregate(
+        assertThrows(TopologyException.class, () -> groupedTable.aggregate(
             MockInitializer.STRING_INIT,
             MockAggregator.TOSTRING_ADDER,
             MockAggregator.TOSTRING_REMOVER,
-            Materialized.as(INVALID_STORE_NAME));
+            Materialized.as(INVALID_STORE_NAME)));
     }
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldNotAllowNullInitializerOnAggregate() {
-        groupedTable.aggregate(
+        assertThrows(NullPointerException.class, () -> groupedTable.aggregate(
             null,
             MockAggregator.TOSTRING_ADDER,
             MockAggregator.TOSTRING_REMOVER,
-            Materialized.as("store"));
+            Materialized.as("store")));
     }
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldNotAllowNullAdderOnAggregate() {
-        groupedTable.aggregate(
+        assertThrows(NullPointerException.class, () -> groupedTable.aggregate(
             MockInitializer.STRING_INIT,
             null,
             MockAggregator.TOSTRING_REMOVER,
-            Materialized.as("store"));
+            Materialized.as("store")));
     }
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldNotAllowNullSubtractorOnAggregate() {
-        groupedTable.aggregate(
+        assertThrows(NullPointerException.class, () -> groupedTable.aggregate(
             MockInitializer.STRING_INIT,
             MockAggregator.TOSTRING_ADDER,
             null,
-            Materialized.as("store"));
+            Materialized.as("store")));
     }
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldNotAllowNullAdderOnReduce() {
-        groupedTable.reduce(
+        assertThrows(NullPointerException.class, () -> groupedTable.reduce(
             null,
             MockReducer.STRING_REMOVER,
-            Materialized.as("store"));
+            Materialized.as("store")));
     }
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldNotAllowNullSubtractorOnReduce() {
-        groupedTable.reduce(
+        assertThrows(NullPointerException.class, () -> groupedTable.reduce(
             MockReducer.STRING_ADDER,
             null,
-            Materialized.as("store"));
+            Materialized.as("store")));
     }
 
-    @Test(expected = TopologyException.class)
+    @Test
     public void shouldNotAllowInvalidStoreNameOnReduce() {
-        groupedTable.reduce(
+        assertThrows(TopologyException.class, () -> groupedTable.reduce(
             MockReducer.STRING_ADDER,
             MockReducer.STRING_REMOVER,
-            Materialized.as(INVALID_STORE_NAME));
+            Materialized.as(INVALID_STORE_NAME)));
     }
 
-    private MockProcessorSupplier<String, Integer> getReducedResults(final KTable<String, Integer> inputKTable) {
-        final MockProcessorSupplier<String, Integer> supplier = new MockProcessorSupplier<>();
+    private MockApiProcessorSupplier<String, Integer, Void, Void> getReducedResults(final KTable<String, Integer> inputKTable) {
+        final MockApiProcessorSupplier<String, Integer, Void, Void> supplier = new MockApiProcessorSupplier<>();
         inputKTable
             .toStream()
             .process(supplier);
@@ -171,10 +172,10 @@ public class KGroupedTableImplTest {
                 MockReducer.INTEGER_SUBTRACTOR,
                 Materialized.as("reduced"));
 
-        final MockProcessorSupplier<String, Integer> supplier = getReducedResults(reduced);
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
-            assertReduced(supplier.theCapturedProcessor().lastValueAndTimestampPerKey, topic, driver);
-            assertEquals(reduced.queryableStoreName(), "reduced");
+        final MockApiProcessorSupplier<String, Integer, Void, Void> supplier = getReducedResults(reduced);
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
+            assertReduced(supplier.theCapturedProcessor().lastValueAndTimestampPerKey(), topic, driver);
+            assertEquals("reduced", reduced.queryableStoreName());
         }
     }
 
@@ -193,14 +194,13 @@ public class KGroupedTableImplTest {
             .groupBy(intProjection)
             .reduce(MockReducer.INTEGER_ADDER, MockReducer.INTEGER_SUBTRACTOR);
 
-        final MockProcessorSupplier<String, Integer> supplier = getReducedResults(reduced);
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
-            assertReduced(supplier.theCapturedProcessor().lastValueAndTimestampPerKey, topic, driver);
+        final MockApiProcessorSupplier<String, Integer, Void, Void> supplier = getReducedResults(reduced);
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
+            assertReduced(supplier.theCapturedProcessor().lastValueAndTimestampPerKey(), topic, driver);
             assertNull(reduced.queryableStoreName());
         }
     }
 
-    @SuppressWarnings("unchecked")
     @Test
     public void shouldReduceAndMaterializeResults() {
         final KeyValueMapper<String, Number, KeyValue<String, Integer>> intProjection =
@@ -218,23 +218,22 @@ public class KGroupedTableImplTest {
                     .withKeySerde(Serdes.String())
                     .withValueSerde(Serdes.Integer()));
 
-        final MockProcessorSupplier<String, Integer> supplier = getReducedResults(reduced);
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
-            assertReduced(supplier.theCapturedProcessor().lastValueAndTimestampPerKey, topic, driver);
+        final MockApiProcessorSupplier<String, Integer, Void, Void> supplier = getReducedResults(reduced);
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
+            assertReduced(supplier.theCapturedProcessor().lastValueAndTimestampPerKey(), topic, driver);
             {
                 final KeyValueStore<String, Integer> reduce = driver.getKeyValueStore("reduce");
-                assertThat(reduce.get("A"), equalTo(5));
-                assertThat(reduce.get("B"), equalTo(6));
+                assertEquals(5, reduce.get("A"));
+                assertEquals(6, reduce.get("B"));
             }
             {
                 final KeyValueStore<String, ValueAndTimestamp<Integer>> reduce = driver.getTimestampedKeyValueStore("reduce");
-                assertThat(reduce.get("A"), equalTo(ValueAndTimestamp.make(5, 50L)));
-                assertThat(reduce.get("B"), equalTo(ValueAndTimestamp.make(6, 30L)));
+                assertEquals(ValueAndTimestamp.make(5, 50L), reduce.get("A"));
+                assertEquals(ValueAndTimestamp.make(6, 30L), reduce.get("B"));
             }
         }
     }
 
-    @SuppressWarnings("unchecked")
     @Test
     public void shouldCountAndMaterializeResults() {
         builder
@@ -249,22 +248,21 @@ public class KGroupedTableImplTest {
                     .withKeySerde(Serdes.String())
                     .withValueSerde(Serdes.Long()));
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             processData(topic, driver);
             {
                 final KeyValueStore<String, Long> counts = driver.getKeyValueStore("count");
-                assertThat(counts.get("1"), equalTo(3L));
-                assertThat(counts.get("2"), equalTo(2L));
+                assertEquals(3L, counts.get("1"));
+                assertEquals(2L, counts.get("2"));
             }
             {
                 final KeyValueStore<String, ValueAndTimestamp<Long>> counts = driver.getTimestampedKeyValueStore("count");
-                assertThat(counts.get("1"), equalTo(ValueAndTimestamp.make(3L, 50L)));
-                assertThat(counts.get("2"), equalTo(ValueAndTimestamp.make(2L, 60L)));
+                assertEquals(ValueAndTimestamp.make(3L, 50L), counts.get("1"));
+                assertEquals(ValueAndTimestamp.make(2L, 60L), counts.get("2"));
             }
         }
     }
 
-    @SuppressWarnings("unchecked")
     @Test
     public void shouldAggregateAndMaterializeResults() {
         builder
@@ -282,89 +280,88 @@ public class KGroupedTableImplTest {
                     .withValueSerde(Serdes.String())
                     .withKeySerde(Serdes.String()));
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             processData(topic, driver);
             {
                 {
                     final KeyValueStore<String, String> aggregate = driver.getKeyValueStore("aggregate");
-                    assertThat(aggregate.get("1"), equalTo("0+1+1+1"));
-                    assertThat(aggregate.get("2"), equalTo("0+2+2"));
+                    assertEquals("0+1+1+1", aggregate.get("1"));
+                    assertEquals("0+2+2", aggregate.get("2"));
                 }
                 {
                     final KeyValueStore<String, ValueAndTimestamp<String>> aggregate = driver.getTimestampedKeyValueStore("aggregate");
-                    assertThat(aggregate.get("1"), equalTo(ValueAndTimestamp.make("0+1+1+1", 50L)));
-                    assertThat(aggregate.get("2"), equalTo(ValueAndTimestamp.make("0+2+2", 60L)));
+                    assertEquals(ValueAndTimestamp.make("0+1+1+1", 50L), aggregate.get("1"));
+                    assertEquals(ValueAndTimestamp.make("0+2+2", 60L), aggregate.get("2"));
                 }
             }
         }
     }
 
     @SuppressWarnings("unchecked")
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldThrowNullPointOnCountWhenMaterializedIsNull() {
-        groupedTable.count((Materialized) null);
+        assertThrows(NullPointerException.class, () -> groupedTable.count((Materialized) null));
     }
 
-    @SuppressWarnings("unchecked")
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldThrowNullPointerOnReduceWhenMaterializedIsNull() {
-        groupedTable.reduce(
+        assertThrows(NullPointerException.class, () -> groupedTable.reduce(
             MockReducer.STRING_ADDER,
             MockReducer.STRING_REMOVER,
-            (Materialized) null);
+            null));
     }
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldThrowNullPointerOnReduceWhenAdderIsNull() {
-        groupedTable.reduce(
+        assertThrows(NullPointerException.class, () -> groupedTable.reduce(
             null,
             MockReducer.STRING_REMOVER,
-            Materialized.as("store"));
+            Materialized.as("store")));
     }
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldThrowNullPointerOnReduceWhenSubtractorIsNull() {
-        groupedTable.reduce(
+        assertThrows(NullPointerException.class, () -> groupedTable.reduce(
             MockReducer.STRING_ADDER,
             null,
-            Materialized.as("store"));
+            Materialized.as("store")));
     }
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldThrowNullPointerOnAggregateWhenInitializerIsNull() {
-        groupedTable.aggregate(
+        assertThrows(NullPointerException.class, () -> groupedTable.aggregate(
             null,
             MockAggregator.TOSTRING_ADDER,
             MockAggregator.TOSTRING_REMOVER,
-            Materialized.as("store"));
+            Materialized.as("store")));
     }
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldThrowNullPointerOnAggregateWhenAdderIsNull() {
-        groupedTable.aggregate(
+        assertThrows(NullPointerException.class, () -> groupedTable.aggregate(
             MockInitializer.STRING_INIT,
             null,
             MockAggregator.TOSTRING_REMOVER,
-            Materialized.as("store"));
+            Materialized.as("store")));
     }
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldThrowNullPointerOnAggregateWhenSubtractorIsNull() {
-        groupedTable.aggregate(
+        assertThrows(NullPointerException.class, () -> groupedTable.aggregate(
             MockInitializer.STRING_INIT,
             MockAggregator.TOSTRING_ADDER,
             null,
-            Materialized.as("store"));
+            Materialized.as("store")));
     }
 
     @SuppressWarnings("unchecked")
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldThrowNullPointerOnAggregateWhenMaterializedIsNull() {
-        groupedTable.aggregate(
+        assertThrows(NullPointerException.class, () -> groupedTable.aggregate(
             MockInitializer.STRING_INIT,
             MockAggregator.TOSTRING_ADDER,
             MockAggregator.TOSTRING_REMOVER,
-            (Materialized) null);
+            (Materialized) null));
     }
 
     private void processData(final String topic,

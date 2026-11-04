@@ -19,38 +19,27 @@ package org.apache.kafka.common.requests;
 import org.apache.kafka.common.message.ListPartitionReassignmentsResponseData;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
-import org.apache.kafka.common.protocol.types.Struct;
+import org.apache.kafka.common.protocol.Readable;
 
-import java.nio.ByteBuffer;
 import java.util.Map;
 
 public class ListPartitionReassignmentsResponse extends AbstractResponse {
 
     private final ListPartitionReassignmentsResponseData data;
 
-    public ListPartitionReassignmentsResponse(Struct struct) {
-        this(struct, ApiKeys.LIST_PARTITION_REASSIGNMENTS.latestVersion());
-    }
-
     public ListPartitionReassignmentsResponse(ListPartitionReassignmentsResponseData responseData) {
+        super(ApiKeys.LIST_PARTITION_REASSIGNMENTS);
         this.data = responseData;
     }
 
-    ListPartitionReassignmentsResponse(Struct struct, short version) {
-        this.data = new ListPartitionReassignmentsResponseData(struct, version);
-    }
-
-    public static ListPartitionReassignmentsResponse parse(ByteBuffer buffer, short version) {
-        return new ListPartitionReassignmentsResponse(ApiKeys.LIST_PARTITION_REASSIGNMENTS.responseSchema(version).read(buffer), version);
-    }
-
-    public ListPartitionReassignmentsResponseData data() {
-        return data;
+    public static ListPartitionReassignmentsResponse parse(Readable readable, short version) {
+        return new ListPartitionReassignmentsResponse(new ListPartitionReassignmentsResponseData(
+            readable, version));
     }
 
     @Override
-    public boolean shouldClientThrottle(short version) {
-        return true;
+    public ListPartitionReassignmentsResponseData data() {
+        return data;
     }
 
     @Override
@@ -59,12 +48,12 @@ public class ListPartitionReassignmentsResponse extends AbstractResponse {
     }
 
     @Override
-    public Map<Errors, Integer> errorCounts() {
-        return errorCounts(Errors.forCode(data.errorCode()));
+    public void maybeSetThrottleTimeMs(int throttleTimeMs) {
+        data.setThrottleTimeMs(throttleTimeMs);
     }
 
     @Override
-    protected Struct toStruct(short version) {
-        return data.toStruct(version);
+    public Map<Errors, Integer> errorCounts() {
+        return errorCounts(Errors.forCode(data.errorCode()));
     }
 }

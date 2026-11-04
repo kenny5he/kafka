@@ -16,25 +16,44 @@
  */
 package org.apache.kafka.streams.processor.internals;
 
+import org.apache.kafka.common.errors.SerializationException;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeaders;
-import org.junit.Test;
 
-import static org.junit.Assert.assertEquals;
+import org.junit.jupiter.api.Test;
+
+import java.nio.ByteBuffer;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class ProcessorRecordContextTest {
     // timestamp + offset + partition: 8 + 8 + 4
-    private final static long MIN_SIZE = 20L;
+    private static final long MIN_SIZE = 20L;
 
     @Test
-    public void shouldEstimateNullTopicAndNullHeadersAsZeroLength() {
-        final Headers headers = new RecordHeaders();
+    public void shouldNotAllowNullHeaders() {
+        assertThrows(
+            NullPointerException.class,
+            () -> new ProcessorRecordContext(
+                42L,
+                73L,
+                0,
+                "topic",
+                null
+            )
+        );
+    }
+
+    @Test
+    public void shouldEstimateNullTopicAndEmptyHeadersAsZeroLength() {
         final ProcessorRecordContext context = new ProcessorRecordContext(
             42L,
             73L,
             0,
             null,
-            null
+            new RecordHeaders()
         );
 
         assertEquals(MIN_SIZE, context.residentMemorySizeEstimate());
@@ -60,7 +79,7 @@ public class ProcessorRecordContextTest {
             73L,
             0,
             "topic",
-            null
+            new RecordHeaders()
         );
 
         assertEquals(MIN_SIZE + 5L, context.residentMemorySizeEstimate());
@@ -94,5 +113,40 @@ public class ProcessorRecordContextTest {
         );
 
         assertEquals(MIN_SIZE + 10L, context.residentMemorySizeEstimate());
+    }
+
+    @Test
+    public void shouldRejectHeaderCountLargerThanRemainingBuffer() {
+        final Headers headers = new RecordHeaders();
+        headers.add("header-key", "header-value".getBytes(UTF_8));
+        final ProcessorRecordContext context = new ProcessorRecordContext(
+                42L, 73L, 0, "topic", headers);
+
+        final byte[] serialized = context.serialize();
+        final ByteBuffer buffer = ByteBuffer.wrap(serialized);
+
+        // Locate headerCount's position within the real serialized bytes
+        // timestamp(8) + offset(8) + topicLen(4) + "topic"(5) + partition(4)
+        final int headerCountOffset = 8 + 8 + 4 + "topic".getBytes(UTF_8).length + 4;
+        final int bytesAfterHeaderCount = serialized.length - (headerCountOffset + 4);
+        final int maxPlausibleHeaderCount = bytesAfterHeaderCount / (2 * Integer.BYTES);
+
+        // Overwrite the real headerCount with a little more that it could support
+        buffer.putInt(headerCountOffset, maxPlausibleHeaderCount + 1);
+
+        assertThrows(SerializationException.class, () -> ProcessorRecordContext.deserialize(buffer));
+    }
+
+    @Test
+    public void shouldDeserializeValidHeaderCountWithoutRejecting() {
+        final Headers headers = new RecordHeaders();
+        headers.add("header-key", "header-value".getBytes(UTF_8));
+        final ProcessorRecordContext context = new ProcessorRecordContext(
+                42L, 73L, 0, "topic", headers);
+
+        final ProcessorRecordContext roundTripped =
+                ProcessorRecordContext.deserialize(ByteBuffer.wrap(context.serialize()));
+
+        assertEquals(context, roundTripped);
     }
 }

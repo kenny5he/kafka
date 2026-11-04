@@ -16,15 +16,29 @@
  */
 package org.apache.kafka.streams.state.internals;
 
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.Serializer;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.KeyValue;
-import org.apache.kafka.streams.processor.ProcessorContext;
 import org.apache.kafka.streams.processor.StateStore;
+import org.apache.kafka.streams.processor.StateStoreContext;
+import org.apache.kafka.streams.query.KeyQuery;
+import org.apache.kafka.streams.query.Position;
+import org.apache.kafka.streams.query.PositionBound;
+import org.apache.kafka.streams.query.Query;
+import org.apache.kafka.streams.query.QueryConfig;
+import org.apache.kafka.streams.query.QueryResult;
+import org.apache.kafka.streams.query.RangeQuery;
+import org.apache.kafka.streams.query.TimestampedKeyQuery;
+import org.apache.kafka.streams.query.TimestampedRangeQuery;
+import org.apache.kafka.streams.query.internals.InternalQueryResultUtil;
 import org.apache.kafka.streams.state.KeyValueBytesStoreSupplier;
 import org.apache.kafka.streams.state.KeyValueIterator;
 import org.apache.kafka.streams.state.KeyValueStore;
+import org.apache.kafka.streams.state.TimestampedBytesStore;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.apache.kafka.streams.state.TimestampedBytesStore.convertToTimestampedFormat;
 import static org.apache.kafka.streams.state.internals.ValueAndTimestampDeserializer.rawValue;
@@ -39,7 +53,9 @@ import static org.apache.kafka.streams.state.internals.ValueAndTimestampDeserial
  *
  * @see KeyValueToTimestampedKeyValueIteratorAdapter
  */
-public class KeyValueToTimestampedKeyValueByteStoreAdapter implements KeyValueStore<Bytes, byte[]> {
+
+@SuppressWarnings("unchecked")
+public class KeyValueToTimestampedKeyValueByteStoreAdapter implements KeyValueStore<Bytes, byte[]>, TimestampedBytesStore {
     final KeyValueStore<Bytes, byte[]> store;
 
     KeyValueToTimestampedKeyValueByteStoreAdapter(final KeyValueStore<Bytes, byte[]> store) {
@@ -52,7 +68,7 @@ public class KeyValueToTimestampedKeyValueByteStoreAdapter implements KeyValueSt
     @Override
     public void put(final Bytes key,
                     final byte[] valueWithTimestamp) {
-        store.put(key, valueWithTimestamp == null ? null : rawValue(valueWithTimestamp));
+        store.put(key, rawValue(valueWithTimestamp));
     }
 
     @Override
@@ -60,14 +76,14 @@ public class KeyValueToTimestampedKeyValueByteStoreAdapter implements KeyValueSt
                               final byte[] valueWithTimestamp) {
         return convertToTimestampedFormat(store.putIfAbsent(
             key,
-            valueWithTimestamp == null ? null : rawValue(valueWithTimestamp)));
+            rawValue(valueWithTimestamp)));
     }
 
     @Override
     public void putAll(final List<KeyValue<Bytes, byte[]>> entries) {
         for (final KeyValue<Bytes, byte[]> entry : entries) {
             final byte[] valueWithTimestamp = entry.value;
-            store.put(entry.key, valueWithTimestamp == null ? null : rawValue(valueWithTimestamp));
+            store.put(entry.key, rawValue(valueWithTimestamp));
         }
     }
 
@@ -82,14 +98,29 @@ public class KeyValueToTimestampedKeyValueByteStoreAdapter implements KeyValueSt
     }
 
     @Override
-    public void init(final ProcessorContext context,
-                     final StateStore root) {
-        store.init(context, root);
+    public void init(final StateStoreContext stateStoreContext, final StateStore root) {
+        store.init(stateStoreContext, root);
     }
 
     @Override
-    public void flush() {
-        store.flush();
+    public void commit(final Map<TopicPartition, Long> changelogOffsets) {
+        store.commit(changelogOffsets);
+    }
+
+    @SuppressWarnings("deprecation")
+    @Override
+    public boolean managesOffsets() {
+        return store.managesOffsets();
+    }
+
+    @Override
+    public Long committedOffset(final TopicPartition partition) {
+        return store.committedOffset(partition);
+    }
+
+    @Override
+    public long approximateNumUncommittedBytes() {
+        return store.approximateNumUncommittedBytes();
     }
 
     @Override
@@ -108,6 +139,47 @@ public class KeyValueToTimestampedKeyValueByteStoreAdapter implements KeyValueSt
     }
 
     @Override
+    public <R> QueryResult<R> query(
+        final Query<R> query,
+        final PositionBound positionBound,
+        final QueryConfig config) {
+
+
+
+        final long start = config.isCollectExecutionInfo() ? System.nanoTime() : -1L;
+        QueryResult<R> result = store.query(query, positionBound, config);
+
+        // this adapter always needs to return a `value-with-timestamp` result to hold up its contract
+        // thus, we need to add the dummy `-1` timestamp even for `KeyQuery` and `RangeQuery`
+        if (result.isSuccess()) {
+            if (query instanceof KeyQuery || query instanceof TimestampedKeyQuery) {
+                final byte[] plainValue = (byte[]) result.getResult();
+                final byte[] valueWithTimestamp = convertToTimestampedFormat(plainValue);
+                result = (QueryResult<R>) InternalQueryResultUtil.copyAndSubstituteDeserializedResult(result, valueWithTimestamp);
+            } else if (query instanceof RangeQuery || query instanceof TimestampedRangeQuery) {
+                final KeyValueToTimestampedKeyValueAdapterIterator wrappedIterator = new KeyValueToTimestampedKeyValueAdapterIterator((ManagedKeyValueIterator<Bytes, byte[]>) result.getResult());
+                result = (QueryResult<R>) InternalQueryResultUtil.copyAndSubstituteDeserializedResult(result, wrappedIterator);
+            } else {
+                throw new IllegalArgumentException("Unsupported query type: " + query.getClass());
+            }
+        }
+
+        if (config.isCollectExecutionInfo()) {
+
+            final long end = System.nanoTime();
+            result.addExecutionInfo(
+                "Handled in " + getClass() + " in " + (end - start) + "ns"
+            );
+        }
+        return result;
+    }
+
+    @Override
+    public Position getPosition() {
+        return store.getPosition();
+    }
+
+    @Override
     public byte[] get(final Bytes key) {
         return convertToTimestampedFormat(store.get(key));
     }
@@ -119,8 +191,25 @@ public class KeyValueToTimestampedKeyValueByteStoreAdapter implements KeyValueSt
     }
 
     @Override
+    public KeyValueIterator<Bytes, byte[]> reverseRange(final Bytes from,
+                                                        final Bytes to) {
+        return new KeyValueToTimestampedKeyValueIteratorAdapter<>(store.reverseRange(from, to));
+    }
+
+    @Override
     public KeyValueIterator<Bytes, byte[]> all() {
         return new KeyValueToTimestampedKeyValueIteratorAdapter<>(store.all());
+    }
+
+    @Override
+    public KeyValueIterator<Bytes, byte[]> reverseAll() {
+        return new KeyValueToTimestampedKeyValueIteratorAdapter<>(store.reverseAll());
+    }
+
+    @Override
+    public <PS extends Serializer<P>, P> KeyValueIterator<Bytes, byte[]> prefixScan(final P prefix,
+                                                                                    final PS prefixKeySerializer) {
+        return new KeyValueToTimestampedKeyValueIteratorAdapter<>(store.prefixScan(prefix, prefixKeySerializer));
     }
 
     @Override
@@ -128,4 +217,41 @@ public class KeyValueToTimestampedKeyValueByteStoreAdapter implements KeyValueSt
         return store.approximateNumEntries();
     }
 
+    private static class KeyValueToTimestampedKeyValueAdapterIterator implements ManagedKeyValueIterator<Bytes, byte[]> {
+
+        private final ManagedKeyValueIterator<Bytes, byte[]> iterator;
+
+        public KeyValueToTimestampedKeyValueAdapterIterator(final ManagedKeyValueIterator<Bytes, byte[]> iterator) {
+            this.iterator = iterator;
+        }
+
+        @Override
+        public void close() {
+            iterator.close();
+        }
+
+        @Override
+        public Bytes peekNextKey() {
+            return iterator.peekNextKey();
+        }
+
+        @Override
+        public void onClose(final Runnable closeCallback) {
+            iterator.onClose(closeCallback);
+        }
+
+        @Override
+        public boolean hasNext() {
+            return iterator.hasNext();
+        }
+
+        @Override
+        public KeyValue<Bytes, byte[]> next() {
+            final KeyValue<Bytes, byte[]> next = iterator.next();
+            if (next == null) {
+                return null;
+            }
+            return KeyValue.pair(next.key, convertToTimestampedFormat(next.value));
+        }
+    }
 }

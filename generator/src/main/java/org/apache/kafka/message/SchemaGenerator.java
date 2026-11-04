@@ -79,21 +79,21 @@ final class SchemaGenerator {
         this.messages = new HashMap<>();
     }
 
-    void generateSchemas(MessageSpec message) throws Exception {
+    void generateSchemas(MessageSpec message) {
         this.messageFlexibleVersions = message.flexibleVersions();
-        // Generate schemas for inline structures
-        generateSchemas(message.generatedClassName(), message.struct(),
-            message.struct().versions());
 
-        // Generate schemas for common structures
+        // First generate schemas for common structures so that they are
+        // available when we generate the inline structures
         for (Iterator<StructSpec> iter = structRegistry.commonStructs(); iter.hasNext(); ) {
             StructSpec struct = iter.next();
-            generateSchemas(struct.name(), struct, struct.versions());
+            generateSchemas(struct.name(), struct, message.struct().versions());
         }
+
+        // Generate schemas for inline structures
+        generateSchemas(message.dataClassName(), message.struct(), message.struct().versions());
     }
 
-    void generateSchemas(String className, StructSpec struct,
-                         Versions parentVersions) throws Exception {
+    void generateSchemas(String className, StructSpec struct, Versions parentVersions) {
         Versions versions = parentVersions.intersect(struct.versions());
         MessageInfo messageInfo = messages.get(className);
         if (messageInfo != null) {
@@ -125,7 +125,7 @@ final class SchemaGenerator {
 
     private void generateSchemaForVersion(StructSpec struct,
                                           short version,
-                                          CodeBuffer buffer) throws Exception {
+                                          CodeBuffer buffer) {
         // Find the last valid field index.
         int lastValidIndex = struct.fields().size() - 1;
         while (true) {
@@ -170,7 +170,7 @@ final class SchemaGenerator {
     }
 
     private void generateTaggedFieldsSchemaForVersion(StructSpec struct,
-            short version, CodeBuffer buffer) throws Exception {
+            short version, CodeBuffer buffer) {
         headerGenerator.addStaticImport(MessageGenerator.TAGGED_FIELDS_SECTION_CLASS);
 
         // Find the last valid tagged field index.
@@ -215,15 +215,13 @@ final class SchemaGenerator {
         return fieldTypeToSchemaType(field.type(),
             field.nullableVersions().contains(version),
             version,
-            fieldFlexibleVersions,
-            field.zeroCopy());
+            fieldFlexibleVersions);
     }
 
     private String fieldTypeToSchemaType(FieldType type,
                                          boolean nullable,
                                          short version,
-                                         Versions fieldFlexibleVersions,
-                                         boolean zeroCopy) {
+                                         Versions fieldFlexibleVersions) {
         if (type instanceof FieldType.BoolFieldType) {
             headerGenerator.addImport(MessageGenerator.TYPE_CLASS);
             if (nullable) {
@@ -242,6 +240,18 @@ final class SchemaGenerator {
                 throw new RuntimeException("Type " + type + " cannot be nullable.");
             }
             return "Type.INT16";
+        } else if (type instanceof FieldType.Uint16FieldType) {
+            headerGenerator.addImport(MessageGenerator.TYPE_CLASS);
+            if (nullable) {
+                throw new RuntimeException("Type " + type + " cannot be nullable.");
+            }
+            return "Type.UINT16";
+        } else if (type instanceof FieldType.Uint32FieldType) {
+            headerGenerator.addImport(MessageGenerator.TYPE_CLASS);
+            if (nullable) {
+                throw new RuntimeException("Type " + type + " cannot be nullable.");
+            }
+            return "Type.UNSIGNED_INT32";
         } else if (type instanceof FieldType.Int32FieldType) {
             headerGenerator.addImport(MessageGenerator.TYPE_CLASS);
             if (nullable) {
@@ -280,27 +290,35 @@ final class SchemaGenerator {
             } else {
                 return nullable ? "Type.NULLABLE_BYTES" : "Type.BYTES";
             }
+        } else if (type.isRecords()) {
+            headerGenerator.addImport(MessageGenerator.TYPE_CLASS);
+            if (fieldFlexibleVersions.contains(version)) {
+                return nullable ? "Type.COMPACT_NULLABLE_RECORDS" : "Type.COMPACT_RECORDS";
+            } else {
+                return nullable ? "Type.NULLABLE_RECORDS" : "Type.RECORDS";
+            }
         } else if (type.isArray()) {
             if (fieldFlexibleVersions.contains(version)) {
                 headerGenerator.addImport(MessageGenerator.COMPACT_ARRAYOF_CLASS);
                 FieldType.ArrayType arrayType = (FieldType.ArrayType) type;
                 String prefix = nullable ? "CompactArrayOf.nullable" : "new CompactArrayOf";
                 return String.format("%s(%s)", prefix,
-                        fieldTypeToSchemaType(arrayType.elementType(), false, version, fieldFlexibleVersions, false));
+                        fieldTypeToSchemaType(arrayType.elementType(), false, version, fieldFlexibleVersions));
 
             } else {
                 headerGenerator.addImport(MessageGenerator.ARRAYOF_CLASS);
                 FieldType.ArrayType arrayType = (FieldType.ArrayType) type;
                 String prefix = nullable ? "ArrayOf.nullable" : "new ArrayOf";
                 return String.format("%s(%s)", prefix,
-                        fieldTypeToSchemaType(arrayType.elementType(), false, version, fieldFlexibleVersions, false));
+                        fieldTypeToSchemaType(arrayType.elementType(), false, version, fieldFlexibleVersions));
             }
         } else if (type.isStruct()) {
             if (nullable) {
-                throw new RuntimeException("Type " + type + " cannot be nullable.");
+                headerGenerator.addImport(MessageGenerator.NULLABLE_SCHEMA_CLASS);
             }
-            return String.format("%s.SCHEMA_%d", type.toString(),
+            String schemaType = String.format("%s.SCHEMA_%d", type,
                 floorVersion(type.toString(), version));
+            return nullable ? String.format("new NullableSchema(%s)", schemaType) : schemaType;
         } else {
             throw new RuntimeException("Unsupported type " + type);
         }
@@ -321,7 +339,7 @@ final class SchemaGenerator {
      * @param className     The class name.
      * @param buffer        The destination buffer.
      */
-    void writeSchema(String className, CodeBuffer buffer) throws Exception {
+    void writeSchema(String className, CodeBuffer buffer) {
         MessageInfo messageInfo = messages.get(className);
         Versions versions = messageInfo.versions;
 
@@ -347,6 +365,10 @@ final class SchemaGenerator {
         }
         buffer.decrementIndent();
         buffer.printf("};%n");
+        buffer.printf("%n");
+
+        buffer.printf("public static final short LOWEST_SUPPORTED_VERSION = %d;%n", versions.lowest());
+        buffer.printf("public static final short HIGHEST_SUPPORTED_VERSION = %d;%n", versions.highest());
         buffer.printf("%n");
     }
 }

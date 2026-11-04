@@ -16,12 +16,26 @@
  */
 package org.apache.kafka.common.serialization;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
+import org.apache.kafka.common.header.Headers;
+
+import java.nio.ByteBuffer;
+
+@InterfaceAudience.Public
 public class VoidDeserializer implements Deserializer<Void> {
     @Override
     public Void deserialize(String topic, byte[] data) {
         if (data != null)
             throw new IllegalArgumentException("Data should be null for a VoidDeserializer.");
 
+        return null;
+    }
+
+    @Override
+    public Void deserialize(String topic, Headers headers, ByteBuffer data) {
+        if (data != null) {
+            throw new IllegalArgumentException("Data should be null for a VoidDeserializer.");
+        }
         return null;
     }
 }

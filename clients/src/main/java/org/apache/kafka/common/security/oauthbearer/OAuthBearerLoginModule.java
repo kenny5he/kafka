@@ -16,8 +16,19 @@
  */
 package org.apache.kafka.common.security.oauthbearer;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
+import org.apache.kafka.common.config.SaslConfigs;
+import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
+import org.apache.kafka.common.security.auth.Login;
+import org.apache.kafka.common.security.auth.SaslExtensions;
+import org.apache.kafka.common.security.auth.SaslExtensionsCallback;
+import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerSaslClientProvider;
+import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerSaslServerProvider;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Objects;
@@ -29,16 +40,6 @@ import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.auth.login.LoginException;
 import javax.security.auth.spi.LoginModule;
 
-import org.apache.kafka.common.config.SaslConfigs;
-import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
-import org.apache.kafka.common.security.auth.Login;
-import org.apache.kafka.common.security.auth.SaslExtensionsCallback;
-import org.apache.kafka.common.security.auth.SaslExtensions;
-import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerSaslClientProvider;
-import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerSaslServerProvider;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 /**
  * The {@code LoginModule} for the SASL/OAUTHBEARER mechanism. When a client
  * (whether a non-broker client or a broker when SASL/OAUTHBEARER is the
@@ -46,8 +47,12 @@ import org.slf4j.LoggerFactory;
  * instance asks its configured {@link AuthenticateCallbackHandler}
  * implementation to handle an instance of {@link OAuthBearerTokenCallback} and
  * return an instance of {@link OAuthBearerToken}. A default, builtin
- * {@link AuthenticateCallbackHandler} implementation creates an unsecured token
- * as defined by these JAAS module options:
+ * {@link org.apache.kafka.common.security.oauthbearer.internals.unsecured.OAuthBearerUnsecuredLoginCallbackHandler}
+ * implementation creates an unsecured token as defined by these JAAS module
+ * options. This builtin handler is intended for testing purposes only,
+ * including when it is relied upon for a tokenless login (no JAAS module
+ * options, or only options unrelated to unsecured token creation, e.g.
+ * {@code ssl.*} options used for JWKS endpoint TLS trust):
  * <p>
  * <table>
  * <tr>
@@ -235,6 +240,7 @@ import org.slf4j.LoggerFactory;
  * @see SaslConfigs#SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS_DOC
  * @see SaslConfigs#SASL_LOGIN_REFRESH_BUFFER_SECONDS_DOC
  */
+@InterfaceAudience.Public
 public class OAuthBearerLoginModule implements LoginModule {
 
     /**
@@ -256,7 +262,7 @@ public class OAuthBearerLoginModule implements LoginModule {
      */
     public static final String OAUTHBEARER_MECHANISM = "OAUTHBEARER";
     private static final Logger log = LoggerFactory.getLogger(OAuthBearerLoginModule.class);
-    private static final SaslExtensions EMPTY_EXTENSIONS = new SaslExtensions(Collections.emptyMap());
+    private static final SaslExtensions EMPTY_EXTENSIONS = new SaslExtensions(Map.of());
     private Subject subject = null;
     private AuthenticateCallbackHandler callbackHandler = null;
     private OAuthBearerToken tokenRequiringCommit = null;
@@ -316,7 +322,10 @@ public class OAuthBearerLoginModule implements LoginModule {
             callbackHandler.handle(new Callback[] {tokenCallback});
         } catch (IOException | UnsupportedCallbackException e) {
             log.error(e.getMessage(), e);
-            throw new LoginException("An internal error occurred while retrieving token from callback handler");
+            LoginException le = new LoginException(
+                    "An internal error occurred while retrieving token from callback handler: " + e.getMessage());
+            le.initCause(e);
+            throw le;
         }
 
         tokenRequiringCommit = tokenCallback.token();

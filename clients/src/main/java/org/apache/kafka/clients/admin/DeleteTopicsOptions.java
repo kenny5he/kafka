@@ -17,17 +17,17 @@
 
 package org.apache.kafka.clients.admin;
 
-import org.apache.kafka.common.annotation.InterfaceStability;
+import org.apache.kafka.common.annotation.InterfaceAudience;
 
 import java.util.Collection;
 
 /**
  * Options for {@link Admin#deleteTopics(Collection)}.
- *
- * The API of this class is evolving, see {@link Admin} for details.
  */
-@InterfaceStability.Evolving
+@InterfaceAudience.Public
 public class DeleteTopicsOptions extends AbstractOptions<DeleteTopicsOptions> {
+
+    private boolean retryOnQuotaViolation = true;
 
     /**
      * Set the timeout in milliseconds for this operation or {@code null} if the default api timeout for the
@@ -40,4 +40,18 @@ public class DeleteTopicsOptions extends AbstractOptions<DeleteTopicsOptions> {
         return this;
     }
 
+    /**
+     * Set to true if quota violation should be automatically retried.
+     */
+    public DeleteTopicsOptions retryOnQuotaViolation(boolean retryOnQuotaViolation) {
+        this.retryOnQuotaViolation = retryOnQuotaViolation;
+        return this;
+    }
+
+    /**
+     * Returns true if quota violation should be automatically retried.
+     */
+    public boolean shouldRetryOnQuotaViolation() {
+        return retryOnQuotaViolation;
+    }
 }

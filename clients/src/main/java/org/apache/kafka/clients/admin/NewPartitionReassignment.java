@@ -17,14 +17,15 @@
 
 package org.apache.kafka.clients.admin;
 
-import java.util.ArrayList;
-import java.util.Collections;
+import org.apache.kafka.common.annotation.InterfaceAudience;
+
 import java.util.List;
 import java.util.Map;
 
 /**
  * A new partition reassignment, which can be applied via {@link AdminClient#alterPartitionReassignments(Map, AlterPartitionReassignmentsOptions)}.
  */
+@InterfaceAudience.Public
 public class NewPartitionReassignment {
     private final List<Integer> targetReplicas;
 
@@ -32,9 +33,9 @@ public class NewPartitionReassignment {
      * @throws IllegalArgumentException if no replicas are supplied
      */
     public NewPartitionReassignment(List<Integer> targetReplicas) {
-        if (targetReplicas == null || targetReplicas.size() == 0)
+        if (targetReplicas == null || targetReplicas.isEmpty())
             throw new IllegalArgumentException("Cannot create a new partition reassignment without any replicas");
-        this.targetReplicas = Collections.unmodifiableList(new ArrayList<>(targetReplicas));
+        this.targetReplicas = List.copyOf(targetReplicas);
     }
 
     public List<Integer> targetReplicas() {

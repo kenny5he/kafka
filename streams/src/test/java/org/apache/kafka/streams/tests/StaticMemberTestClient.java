@@ -17,24 +17,29 @@
 package org.apache.kafka.streams.tests;
 
 import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.common.utils.Exit;
+import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.utils.Utils;
+import org.apache.kafka.common.utils.internals.Exit;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.kstream.KStream;
+import org.apache.kafka.streams.kstream.Materialized;
+import org.apache.kafka.streams.state.KeyValueBytesStoreSupplier;
+import org.apache.kafka.streams.state.Stores;
 
 import java.util.Objects;
 import java.util.Properties;
 
 public class StaticMemberTestClient {
 
-    private static String testName = "StaticMemberTestClient";
+    private static final String TEST_NAME = "StaticMemberTestClient";
+    private static final String PERSISTENT_PROCESS_ID_STORE_ENABLED = "persistent.process.id.store.enabled";
 
     @SuppressWarnings("unchecked")
     public static void main(final String[] args) throws Exception {
         if (args.length < 1) {
-            System.err.println(testName + " requires one argument (properties-file) but none provided: ");
+            System.err.println(TEST_NAME + " requires one argument (properties-file) but none provided: ");
         }
 
         System.out.println("StreamsTest instance started");
@@ -45,19 +50,30 @@ public class StaticMemberTestClient {
 
         final String groupInstanceId = Objects.requireNonNull(streamsProperties.getProperty(ConsumerConfig.GROUP_INSTANCE_ID_CONFIG));
 
-        System.out.println(testName + " instance started with group.instance.id " + groupInstanceId);
+        System.out.println(TEST_NAME + " instance started with group.instance.id " + groupInstanceId);
         System.out.println("props=" + streamsProperties);
         System.out.flush();
 
         final StreamsBuilder builder = new StreamsBuilder();
         final String inputTopic = (String) (Objects.requireNonNull(streamsProperties.remove("input.topic")));
 
-        final KStream dataStream = builder.stream(inputTopic);
-        dataStream.peek((k, v) ->  System.out.println(String.format("PROCESSED key=%s value=%s", k, v)));
+        final KStream<String, String> dataStream = builder.stream(inputTopic);
+        dataStream.peek((k, v) ->  System.out.printf("PROCESSED key=%s value=%s%n", k, v));
+
+        final boolean persistentProcessIdStoreEnabled = Boolean.parseBoolean(
+            (String) streamsProperties.remove(PERSISTENT_PROCESS_ID_STORE_ENABLED)
+        );
+        if (persistentProcessIdStoreEnabled) {
+            final KeyValueBytesStoreSupplier persistentStoreSupplier =
+                Stores.persistentKeyValueStore("process-id-store");
+            dataStream.groupByKey().count(Materialized.as(persistentStoreSupplier));
+        }
 
         final Properties config = new Properties();
-        config.setProperty(StreamsConfig.APPLICATION_ID_CONFIG, testName);
-        config.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 1000);
+        config.setProperty(StreamsConfig.APPLICATION_ID_CONFIG, TEST_NAME);
+        config.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 1000L);
+        config.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.StringSerde.class);
+        config.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.StringSerde.class);
 
         config.putAll(streamsProperties);
 

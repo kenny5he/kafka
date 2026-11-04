@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.streams.kstream.internals;
 
+import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serializer;
@@ -23,6 +24,7 @@ import org.apache.kafka.common.serialization.Serializer;
 import java.nio.ByteBuffer;
 
 import static java.util.Objects.requireNonNull;
+import static org.apache.kafka.common.utils.Utils.getNullableSizePrefixedArray;
 
 public final class FullChangeSerde<T> {
     private final Serde<T> inner;
@@ -43,56 +45,29 @@ public final class FullChangeSerde<T> {
         return inner;
     }
 
-    public Change<byte[]> serializeParts(final String topic, final Change<T> data) {
+    public Change<byte[]> serializeParts(final String topic, final Headers headers, final Change<T> data) {
         if (data == null) {
             return null;
         }
         final Serializer<T> innerSerializer = innerSerde().serializer();
-        final byte[] oldBytes = data.oldValue == null ? null : innerSerializer.serialize(topic, data.oldValue);
-        final byte[] newBytes = data.newValue == null ? null : innerSerializer.serialize(topic, data.newValue);
+        final byte[] oldBytes = data.oldValue == null ? null : innerSerializer.serialize(topic, headers, data.oldValue);
+        final byte[] newBytes = data.newValue == null ? null : innerSerializer.serialize(topic, headers, data.newValue);
         return new Change<>(newBytes, oldBytes);
     }
 
 
-    public Change<T> deserializeParts(final String topic, final Change<byte[]> serialChange) {
+    public Change<T> deserializeParts(final String topic, final Headers headers, final Change<byte[]> serialChange) {
         if (serialChange == null) {
             return null;
         }
         final Deserializer<T> innerDeserializer = innerSerde().deserializer();
 
         final T oldValue =
-            serialChange.oldValue == null ? null : innerDeserializer.deserialize(topic, serialChange.oldValue);
+            serialChange.oldValue == null ? null : innerDeserializer.deserialize(topic, headers, serialChange.oldValue);
         final T newValue =
-            serialChange.newValue == null ? null : innerDeserializer.deserialize(topic, serialChange.newValue);
+            serialChange.newValue == null ? null : innerDeserializer.deserialize(topic, headers, serialChange.newValue);
 
         return new Change<>(newValue, oldValue);
-    }
-
-    /**
-     * We used to serialize a Change into a single byte[]. Now, we don't anymore, but we still keep this logic here
-     * so that we can produce the legacy format to test that we can still deserialize it.
-     */
-    public static byte[] mergeChangeArraysIntoSingleLegacyFormattedArray(final Change<byte[]> serialChange) {
-        if (serialChange == null) {
-            return null;
-        }
-
-        final int oldSize = serialChange.oldValue == null ? -1 : serialChange.oldValue.length;
-        final int newSize = serialChange.newValue == null ? -1 : serialChange.newValue.length;
-
-        final ByteBuffer buffer = ByteBuffer.allocate(Integer.BYTES * 2 + Math.max(0, oldSize) + Math.max(0, newSize));
-
-
-        buffer.putInt(oldSize);
-        if (serialChange.oldValue != null) {
-            buffer.put(serialChange.oldValue);
-        }
-
-        buffer.putInt(newSize);
-        if (serialChange.newValue != null) {
-            buffer.put(serialChange.newValue);
-        }
-        return buffer.array();
     }
 
     /**
@@ -104,19 +79,8 @@ public final class FullChangeSerde<T> {
             return null;
         }
         final ByteBuffer buffer = ByteBuffer.wrap(data);
-
-        final int oldSize = buffer.getInt();
-        final byte[] oldBytes = oldSize == -1 ? null : new byte[oldSize];
-        if (oldBytes != null) {
-            buffer.get(oldBytes);
-        }
-
-        final int newSize = buffer.getInt();
-        final byte[] newBytes = newSize == -1 ? null : new byte[newSize];
-        if (newBytes != null) {
-            buffer.get(newBytes);
-        }
-
+        final byte[] oldBytes = getNullableSizePrefixedArray(buffer);
+        final byte[] newBytes = getNullableSizePrefixedArray(buffer);
         return new Change<>(newBytes, oldBytes);
     }
 

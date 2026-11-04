@@ -14,8 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.kafka.common;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
+
+import java.util.Locale;
+
+@InterfaceAudience.Public
 public enum IsolationLevel {
     READ_UNCOMMITTED((byte) 0), READ_COMMITTED((byte) 1);
 
@@ -38,5 +44,10 @@ public enum IsolationLevel {
             default:
                 throw new IllegalArgumentException("Unknown isolation level " + id);
         }
+    }
+
+    @Override
+    public String toString() {
+        return super.toString().toLowerCase(Locale.ROOT);
     }
 }

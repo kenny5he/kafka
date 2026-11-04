@@ -14,13 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.kafka.common;
+
+import org.apache.kafka.common.annotation.InterfaceAudience;
 
 import java.util.Map;
 import java.util.Objects;
 
 /**
- * The <code>MetricName</code> class encapsulates a metric's name, logical group and its related attributes. It should be constructed using metrics.MetricName(...).
+ * The <code>MetricName</code> class encapsulates a metric's name, logical group and its related attributes. It should be constructed using metrics.metricName(...).
  * <p>
  * This class captures the following parameters:
  * <pre>
@@ -60,12 +63,13 @@ import java.util.Objects;
  * sensor.record(messageSize);
  * }</pre>
  */
+@InterfaceAudience.Public
 public final class MetricName {
 
     private final String name;
     private final String group;
     private final String description;
-    private Map<String, String> tags;
+    private final Map<String, String> tags;
     private int hash = 0;
 
     /**

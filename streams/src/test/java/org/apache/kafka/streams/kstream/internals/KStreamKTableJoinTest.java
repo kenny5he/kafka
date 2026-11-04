@@ -16,22 +16,18 @@
  */
 package org.apache.kafka.streams.kstream.internals;
 
-import static org.apache.kafka.test.StreamsTestUtils.getMetricByName;
-import static org.hamcrest.CoreMatchers.hasItem;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.junit.Assert.assertEquals;
-
-import java.time.Duration;
-import java.time.Instant;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.Properties;
-import java.util.Random;
-import java.util.Set;
+import org.apache.kafka.common.MetricName;
+import org.apache.kafka.common.header.Header;
+import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.header.internals.RecordHeader;
+import org.apache.kafka.common.header.internals.RecordHeaders;
+import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.IntegerSerializer;
+import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.common.serialization.Serializer;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.apache.kafka.common.utils.LogCaptureAppender;
 import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.KeyValueTimestamp;
 import org.apache.kafka.streams.StreamsBuilder;
@@ -39,22 +35,40 @@ import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.TopologyTestDriverBuilder;
 import org.apache.kafka.streams.TopologyWrapper;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Joined;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.KTable;
-import org.apache.kafka.streams.processor.internals.testutil.LogCaptureAppender;
-import org.apache.kafka.test.MockProcessor;
-import org.apache.kafka.test.MockProcessorSupplier;
+import org.apache.kafka.streams.kstream.Materialized;
+import org.apache.kafka.streams.state.Stores;
+import org.apache.kafka.streams.test.TestRecord;
+import org.apache.kafka.test.MockApiProcessor;
+import org.apache.kafka.test.MockApiProcessorSupplier;
 import org.apache.kafka.test.MockValueJoiner;
 import org.apache.kafka.test.StreamsTestUtils;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Collection;
+import java.util.Properties;
+import java.util.Random;
+import java.util.Set;
+
+import static org.apache.kafka.common.utils.Utils.mkEntry;
+import static org.apache.kafka.common.utils.Utils.mkMap;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class KStreamKTableJoinTest {
-    private final static KeyValueTimestamp<?, ?>[] EMPTY = new KeyValueTimestamp[0];
+    private static final KeyValueTimestamp<?, ?>[] EMPTY = new KeyValueTimestamp[0];
 
     private final String streamTopic = "streamTopic";
     private final String tableTopic = "tableTopic";
@@ -62,14 +76,12 @@ public class KStreamKTableJoinTest {
     private TestInputTopic<Integer, String> inputTableTopic;
     private final int[] expectedKeys = {0, 1, 2, 3};
 
-    private MockProcessor<Integer, String> processor;
+    private MockApiProcessor<Integer, String, Void, Void> processor;
     private TopologyTestDriver driver;
     private StreamsBuilder builder;
-    private final Properties props = StreamsTestUtils.getStreamsConfig(Serdes.Integer(), Serdes.String());
-    private final MockProcessorSupplier<Integer, String> supplier = new MockProcessorSupplier<>();
+    private final MockApiProcessorSupplier<Integer, String, Void, Void> supplier = new MockApiProcessorSupplier<>();
 
-    @Before
-    public void setUp() {
+    public void setUp(final boolean withHeaders) {
         builder = new StreamsBuilder();
 
         final KStream<Integer, String> stream;
@@ -80,21 +92,33 @@ public class KStreamKTableJoinTest {
         table = builder.table(tableTopic, consumed);
         stream.join(table, MockValueJoiner.TOSTRING_JOINER).process(supplier);
         final Properties props = StreamsTestUtils.getStreamsConfig(Serdes.Integer(), Serdes.String());
-        driver = new TopologyTestDriver(builder.build(), props);
+        StreamsTestUtils.maybeSetDslStoreFormatHeaders(props, withHeaders);
+        driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build();
         inputStreamTopic = driver.createInputTopic(streamTopic, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
         inputTableTopic = driver.createInputTopic(tableTopic, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
 
         processor = supplier.theCapturedProcessor();
     }
 
-    @After
+    @AfterEach
     public void cleanup() {
-        driver.close();
+        if (driver != null) {
+            driver.close();
+        }
     }
 
     private void pushToStream(final int messageCount, final String valuePrefix) {
         for (int i = 0; i < messageCount; i++) {
             inputStreamTopic.pipeInput(expectedKeys[i], valuePrefix + expectedKeys[i], i);
+        }
+    }
+
+    private void pushToTableNonRandom(final int messageCount, final String valuePrefix) {
+        for (int i = 0; i < messageCount; i++) {
+            inputTableTopic.pipeInput(
+                expectedKeys[i],
+                valuePrefix + expectedKeys[i],
+                0);
         }
     }
 
@@ -114,11 +138,264 @@ public class KStreamKTableJoinTest {
         }
     }
 
-    @Test
-    public void shouldReuseRepartitionTopicWithGeneratedName() {
+
+    private void makeJoin(final Duration grace) {
+        final KStream<Integer, String> stream;
+        final KTable<Integer, String> table;
+        final MockApiProcessorSupplier<Integer, String, Void, Void> supplier = new MockApiProcessorSupplier<>();
+        builder = new StreamsBuilder();
+
+        final Consumed<Integer, String> consumed = Consumed.with(Serdes.Integer(), Serdes.String());
+        stream = builder.stream(streamTopic, consumed);
+        table = builder.table("tableTopic2", consumed, Materialized.as(
+            Stores.persistentVersionedKeyValueStore("V-grace", Duration.ofMinutes(5))));
+        stream.join(table,
+            MockValueJoiner.TOSTRING_JOINER,
+            Joined.with(Serdes.Integer(), Serdes.String(), Serdes.String(), "Grace", grace)
+        ).process(supplier);
+        final Properties props = StreamsTestUtils.getStreamsConfig(Serdes.Integer(), Serdes.String());
+        driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build();
+        inputStreamTopic = driver.createInputTopic(streamTopic, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
+        inputTableTopic = driver.createInputTopic("tableTopic2", new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
+
+        processor = supplier.theCapturedProcessor();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldFailIfTableIsNotVersioned(final boolean withHeaders) {
         final StreamsBuilder builder = new StreamsBuilder();
         final Properties props = new Properties();
-        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION, StreamsConfig.NO_OPTIMIZATION);
+        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.NO_OPTIMIZATION);
+        StreamsTestUtils.maybeSetDslStoreFormatHeaders(props, withHeaders);
+        final KStream<String, String> streamA = builder.stream("topic", Consumed.with(Serdes.String(), Serdes.String()));
+        final KTable<String, String> tableB = builder.table("topic2", Consumed.with(Serdes.String(), Serdes.String()));
+
+        final IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+            () -> streamA.join(tableB, (value1, value2) -> value1 + value2, Joined.with(Serdes.String(), Serdes.String(), Serdes.String(), "first-join", Duration.ofMillis(6))).to("out-one"));
+        assertEquals("KTable must be versioned to use a grace period in a stream table join.", exception.getMessage());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldFailIfTableIsNotVersionedButMaterializationIsInherited(final boolean withHeaders) {
+        final StreamsBuilder builder = new StreamsBuilder();
+        final Properties props = new Properties();
+        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.NO_OPTIMIZATION);
+        StreamsTestUtils.maybeSetDslStoreFormatHeaders(props, withHeaders);
+        final KStream<String, String> streamA = builder.stream("topic", Consumed.with(Serdes.String(), Serdes.String()));
+        final KTable<String, String> source = builder.table("topic2", Consumed.with(Serdes.String(), Serdes.String()),
+            Materialized.as(Stores.inMemoryKeyValueStore("tableB")));
+        final KTable<String, String> tableB = source.filter((k, v) -> true);
+        // the filter operation forces the table materialization to be inherited
+
+        streamA.join(tableB, (value1, value2) -> value1 + value2, Joined.with(Serdes.String(), Serdes.String(), Serdes.String(), "first-join", Duration.ofMillis(6))).to("out-one");
+
+        final IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, builder::build);
+        assertEquals("KTable must be versioned to use a grace period in a stream table join.", exception.getMessage());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotFailIfTableIsVersionedButMaterializationIsInherited(final boolean withHeaders) {
+        final StreamsBuilder builder = new StreamsBuilder();
+        final Properties props = new Properties();
+        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.NO_OPTIMIZATION);
+        StreamsTestUtils.maybeSetDslStoreFormatHeaders(props, withHeaders);
+        final KStream<String, String> streamA = builder.stream("topic", Consumed.with(Serdes.String(), Serdes.String()));
+        final KTable<String, String> source = builder.table("topic2", Consumed.with(Serdes.String(), Serdes.String()),
+            Materialized.as(Stores.persistentVersionedKeyValueStore("tableB", Duration.ofMinutes(5))));
+        final KTable<String, String> tableB = source.filter((k, v) -> true);
+        // the filter operation forces the table materialization to be inherited
+
+        streamA.join(tableB, (value1, value2) -> value1 + value2, Joined.with(Serdes.String(), Serdes.String(), Serdes.String(), "first-join", Duration.ofMillis(6))).to("out-one");
+
+        //should not throw an error
+        builder.build();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldFailIfGracePeriodIsLongerThanHistoryRetention(final boolean withHeaders) {
+        final StreamsBuilder builder = new StreamsBuilder();
+        final Properties props = new Properties();
+        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.NO_OPTIMIZATION);
+        StreamsTestUtils.maybeSetDslStoreFormatHeaders(props, withHeaders);
+        final KStream<String, String> streamA = builder.stream("topic", Consumed.with(Serdes.String(), Serdes.String()));
+        final KTable<String, String> tableB = builder.table("topic2", Consumed.with(Serdes.String(), Serdes.String()),
+            Materialized.as(Stores.persistentVersionedKeyValueStore("tableB", Duration.ofMinutes(5))));
+
+        streamA.join(tableB, (value1, value2) -> value1 + value2, Joined.with(Serdes.String(), Serdes.String(), Serdes.String(), "first-join", Duration.ofMinutes(6))).to("out-one");
+
+        final IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> builder.build(props));
+        assertEquals("History retention must be at least grace period.", exception.getMessage());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldFailIfGracePeriodIsLongerThanHistoryRetentionAndInheritedStore(final boolean withHeaders) {
+        final StreamsBuilder builder = new StreamsBuilder();
+        final Properties props = new Properties();
+        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.NO_OPTIMIZATION);
+        StreamsTestUtils.maybeSetDslStoreFormatHeaders(props, withHeaders);
+        final KStream<String, String> streamA = builder.stream("topic", Consumed.with(Serdes.String(), Serdes.String()));
+        final KTable<String, String> source = builder.table("topic2", Consumed.with(Serdes.String(), Serdes.String()),
+            Materialized.as(Stores.persistentVersionedKeyValueStore("V-grace", Duration.ofMinutes(0))));
+        final KTable<String, String> tableB = source.filter((k, v) -> true);
+        // the filter operation forces the table materialization to be inherited
+
+        streamA.join(tableB, (value1, value2) -> value1 + value2, Joined.with(Serdes.String(), Serdes.String(), Serdes.String(), "first-join", Duration.ofMillis(6))).to("out-one");
+
+        final IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> builder.build(props));
+        assertEquals("History retention must be at least grace period.", exception.getMessage());
+    }
+
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldDelayJoinByGracePeriod(final boolean withHeaders) {
+        setUp(withHeaders);
+        makeJoin(Duration.ofMillis(2));
+
+        // push four items to the table. this should not produce any item.
+        pushToTableNonRandom(4, "Y");
+        processor.checkAndClearProcessResult(EMPTY);
+
+        // push all four items to the primary stream. this should produce two items.
+        pushToStream(4, "X");
+        processor.checkAndClearProcessResult(
+            new KeyValueTimestamp<>(0, "X0+Y0", 0),
+            new KeyValueTimestamp<>(1, "X1+Y1", 1));
+
+        // push all items to the table. this should not produce any item
+        pushToTableNonRandom(4, "YY");
+        processor.checkAndClearProcessResult(EMPTY);
+
+        // push all four items to the primary stream. this should produce two items.
+        pushToStream(4, "X");
+        processor.checkAndClearProcessResult(
+            new KeyValueTimestamp<>(0, "X0+YY0", 0),
+            new KeyValueTimestamp<>(1, "X1+YY1", 1));
+
+        inputStreamTopic.pipeInput(5, "test", 7);
+
+        processor.checkAndClearProcessResult(
+            new KeyValueTimestamp<>(2, "X2+YY2", 2),
+            new KeyValueTimestamp<>(2, "X2+YY2", 2),
+            new KeyValueTimestamp<>(3, "X3+YY3", 3),
+            new KeyValueTimestamp<>(3, "X3+YY3", 3));
+
+
+        // push all items to the table. this should not produce any item
+        pushToTableNonRandom(4, "YYY");
+        processor.checkAndClearProcessResult(EMPTY);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldHandleLateJoinsWithGracePeriod(final boolean withHeaders) {
+        setUp(withHeaders);
+        makeJoin(Duration.ofMillis(2));
+
+        // push four items to the table. this should not produce any item.
+        pushToTableNonRandom(4, "Y");
+        processor.checkAndClearProcessResult(EMPTY);
+
+        // push 4 records into the buffer and evict the first two
+        pushToStream(4, "X");
+        processor.checkAndClearProcessResult(
+            new KeyValueTimestamp<>(0, "X0+Y0", 0),
+            new KeyValueTimestamp<>(1, "X1+Y1", 1));
+
+        //should be processed immediately and not evict any other records
+        pushToStream(1, "X");
+        processor.checkAndClearProcessResult(
+            new KeyValueTimestamp<>(0, "X0+Y0", 0));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldDeserializeBufferedValueWithPutTimeHeadersDuringEviction(final boolean withHeaders) {
+        builder = new StreamsBuilder();
+        final Consumed<Integer, String> consumed = Consumed.with(Serdes.Integer(), Serdes.String());
+        final KStream<Integer, String> stream = builder.stream(streamTopic, consumed);
+        final KTable<Integer, String> table = builder.table("tableTopic2", consumed, Materialized.as(
+            Stores.persistentVersionedKeyValueStore("V-grace", Duration.ofMinutes(5))));
+        stream.join(table,
+            MockValueJoiner.TOSTRING_JOINER,
+            // The built-in leaf serdes (String, primitives, …) ignore the `headers` argument, so with any of them the test would pass identically
+            // with and without the fix (a false green). The HeaderValueAppendingSerde is the minimal serde whose deserializer reflects the `headers`
+            // argument into the value
+            Joined.with(Serdes.Integer(), new HeaderValueAppendingSerde(), Serdes.String(), "Grace", Duration.ofMillis(2))
+        ).process(supplier);
+        final Properties props = StreamsTestUtils.getStreamsConfig(Serdes.Integer(), Serdes.String());
+        StreamsTestUtils.maybeSetDslStoreFormatHeaders(props, withHeaders);
+        driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build();
+        inputStreamTopic = driver.createInputTopic(streamTopic, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
+        inputTableTopic = driver.createInputTopic("tableTopic2", new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
+        processor = supplier.theCapturedProcessor();
+
+        // Table entry so the buffered stream record finds a join match when it is evicted.
+        inputTableTopic.pipeInput(0, "Y0", 0L);
+
+        // Record A is buffered (grace not yet elapsed) with header v=first at t=0. Nothing is emitted yet.
+        inputStreamTopic.pipeInput(new TestRecord<>(0, "X0", headers("first"), 0L));
+        processor.checkAndClearProcessResult(EMPTY);
+
+        // Record B carries header v=second and its t=10 timestamp advances stream time past A's grace window, which
+        // triggers A's eviction while the live processor context still holds B's headers (v=second). B itself is
+        // buffered, not evicted, so it produces no output here.
+        inputStreamTopic.pipeInput(new TestRecord<>(1, "X1", headers("second"), 10L));
+
+        // A must be deserialized with its own put-time header (first), NOT B's live-context header (second). Before
+        // the fix this asserted "X0[second]+Y0".
+        processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "X0[first]+Y0", 0));
+    }
+
+    private static Headers headers(final String value) {
+        return new RecordHeaders(new Header[]{new RecordHeader("v", value.getBytes(StandardCharsets.UTF_8))});
+    }
+
+    /**
+     * A stream-side value {@link Serde} whose <em>deserializer</em> output depends on the headers it is handed: it
+     * appends the value of the {@code "v"} header to the deserialized string. Serialization is a plain string encode
+     * and ignores headers. This fixture exists so tests can observe <em>which</em> headers reached the buffer's value
+     * deserializer during eviction -- a plain serde would ignore the headers argument and hide the difference.
+     */
+    private static final class HeaderValueAppendingSerde implements Serde<String> {
+        @Override
+        public Serializer<String> serializer() {
+            return new StringSerializer();
+        }
+
+        @Override
+        public Deserializer<String> deserializer() {
+            return new Deserializer<>() {
+                @Override
+                public String deserialize(final String topic, final byte[] data) {
+                    return data == null ? null : new String(data, StandardCharsets.UTF_8);
+                }
+
+                @Override
+                public String deserialize(final String topic, final Headers headers, final byte[] data) {
+                    final String base = deserialize(topic, data);
+                    final Header header = headers == null ? null : headers.lastHeader("v");
+                    if (base == null || header == null) {
+                        return base;
+                    }
+                    return base + "[" + new String(header.value(), StandardCharsets.UTF_8) + "]";
+                }
+            };
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldReuseRepartitionTopicWithGeneratedName(final boolean withHeaders) {
+        final StreamsBuilder builder = new StreamsBuilder();
+        final Properties props = new Properties();
+        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.NO_OPTIMIZATION);
+        StreamsTestUtils.maybeSetDslStoreFormatHeaders(props, withHeaders);
         final KStream<String, String> streamA = builder.stream("topic", Consumed.with(Serdes.String(), Serdes.String()));
         final KTable<String, String> tableB = builder.table("topic2", Consumed.with(Serdes.String(), Serdes.String()));
         final KTable<String, String> tableC = builder.table("topic3", Consumed.with(Serdes.String(), Serdes.String()));
@@ -129,11 +406,13 @@ public class KStreamKTableJoinTest {
         assertEquals(expectedTopologyWithGeneratedRepartitionTopicNames, topology.describe().toString());
     }
 
-    @Test
-    public void shouldCreateRepartitionTopicsWithUserProvidedName() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldCreateRepartitionTopicsWithUserProvidedName(final boolean withHeaders) {
         final StreamsBuilder builder = new StreamsBuilder();
         final Properties props = new Properties();
-        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION, StreamsConfig.NO_OPTIMIZATION);
+        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.NO_OPTIMIZATION);
+        StreamsTestUtils.maybeSetDslStoreFormatHeaders(props, withHeaders);
         final KStream<String, String> streamA = builder.stream("topic", Consumed.with(Serdes.String(), Serdes.String()));
         final KTable<String, String> tableB = builder.table("topic2", Consumed.with(Serdes.String(), Serdes.String()));
         final KTable<String, String> tableC = builder.table("topic3", Consumed.with(Serdes.String(), Serdes.String()));
@@ -146,24 +425,30 @@ public class KStreamKTableJoinTest {
         assertEquals(expectedTopologyWithUserProvidedRepartitionTopicNames, topology.describe().toString());
     }
 
-    @Test
-    public void shouldRequireCopartitionedStreams() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldRequireCopartitionedStreams(final boolean withHeaders) {
+        setUp(withHeaders);
         final Collection<Set<String>> copartitionGroups =
             TopologyWrapper.getInternalTopologyBuilder(builder.build()).copartitionGroups();
 
         assertEquals(1, copartitionGroups.size());
-        assertEquals(new HashSet<>(Arrays.asList(streamTopic, tableTopic)), copartitionGroups.iterator().next());
+        assertEquals(Set.of(streamTopic, tableTopic), copartitionGroups.iterator().next());
     }
 
-    @Test
-    public void shouldNotJoinWithEmptyTableOnStreamUpdates() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotJoinWithEmptyTableOnStreamUpdates(final boolean withHeaders) {
+        setUp(withHeaders);
         // push two items to the primary stream. the table is empty
         pushToStream(2, "X");
         processor.checkAndClearProcessResult(EMPTY);
     }
 
-    @Test
-    public void shouldNotJoinOnTableUpdates() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotJoinOnTableUpdates(final boolean withHeaders) {
+        setUp(withHeaders);
         // push two items to the primary stream. the table is empty
         pushToStream(2, "X");
         processor.checkAndClearProcessResult(EMPTY);
@@ -174,8 +459,10 @@ public class KStreamKTableJoinTest {
 
         // push all four items to the primary stream. this should produce two items.
         pushToStream(4, "X");
-        processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "X0+Y0", 0),
-                new KeyValueTimestamp<>(1, "X1+Y1", 1));
+        processor.checkAndClearProcessResult(
+            new KeyValueTimestamp<>(0, "X0+Y0", 0),
+            new KeyValueTimestamp<>(1, "X1+Y1", 1)
+        );
 
         // push all items to the table. this should not produce any item
         pushToTable(4, "YY");
@@ -183,40 +470,50 @@ public class KStreamKTableJoinTest {
 
         // push all four items to the primary stream. this should produce four items.
         pushToStream(4, "X");
-        processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "X0+YY0", 0),
-                new KeyValueTimestamp<>(1, "X1+YY1", 1),
-                new KeyValueTimestamp<>(2, "X2+YY2", 2),
-                new KeyValueTimestamp<>(3, "X3+YY3", 3));
+        processor.checkAndClearProcessResult(
+            new KeyValueTimestamp<>(0, "X0+YY0", 0),
+            new KeyValueTimestamp<>(1, "X1+YY1", 1),
+            new KeyValueTimestamp<>(2, "X2+YY2", 2),
+            new KeyValueTimestamp<>(3, "X3+YY3", 3)
+        );
 
         // push all items to the table. this should not produce any item
         pushToTable(4, "YYY");
         processor.checkAndClearProcessResult(EMPTY);
     }
 
-    @Test
-    public void shouldJoinOnlyIfMatchFoundOnStreamUpdates() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldJoinOnlyIfMatchFoundOnStreamUpdates(final boolean withHeaders) {
+        setUp(withHeaders);
         // push two items to the table. this should not produce any item.
         pushToTable(2, "Y");
         processor.checkAndClearProcessResult(EMPTY);
 
         // push all four items to the primary stream. this should produce two items.
         pushToStream(4, "X");
-        processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "X0+Y0", 0),
-                new KeyValueTimestamp<>(1, "X1+Y1", 1));
+        processor.checkAndClearProcessResult(
+            new KeyValueTimestamp<>(0, "X0+Y0", 0),
+            new KeyValueTimestamp<>(1, "X1+Y1", 1)
+        );
     }
 
-    @Test
-    public void shouldClearTableEntryOnNullValueUpdates() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldClearTableEntryOnNullValueUpdates(final boolean withHeaders) {
+        setUp(withHeaders);
         // push all four items to the table. this should not produce any item.
         pushToTable(4, "Y");
         processor.checkAndClearProcessResult(EMPTY);
 
         // push all four items to the primary stream. this should produce four items.
         pushToStream(4, "X");
-        processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "X0+Y0", 0),
-                new KeyValueTimestamp<>(1, "X1+Y1", 1),
-                new KeyValueTimestamp<>(2, "X2+Y2", 2),
-                new KeyValueTimestamp<>(3, "X3+Y3", 3));
+        processor.checkAndClearProcessResult(
+            new KeyValueTimestamp<>(0, "X0+Y0", 0),
+            new KeyValueTimestamp<>(1, "X1+Y1", 1),
+            new KeyValueTimestamp<>(2, "X2+Y2", 2),
+            new KeyValueTimestamp<>(3, "X3+Y3", 3)
+        );
 
         // push two items with null to the table as deletes. this should not produce any item.
         pushNullValueToTable();
@@ -224,75 +521,70 @@ public class KStreamKTableJoinTest {
 
         // push all four items to the primary stream. this should produce two items.
         pushToStream(4, "XX");
-        processor.checkAndClearProcessResult(new KeyValueTimestamp<>(2, "XX2+Y2", 2),
-                new KeyValueTimestamp<>(3, "XX3+Y3", 3));
+        processor.checkAndClearProcessResult(
+            new KeyValueTimestamp<>(2, "XX2+Y2", 2),
+            new KeyValueTimestamp<>(3, "XX3+Y3", 3)
+        );
     }
 
-    @Test
-    public void shouldLogAndMeterWhenSkippingNullLeftKeyWithBuiltInMetricsVersion0100To24() {
-        shouldLogAndMeterWhenSkippingNullLeftKey(StreamsConfig.METRICS_0100_TO_24);
-    }
-
-    @Test
-    public void shouldLogAndMeterWhenSkippingNullLeftKeyWithBuiltInMetricsVersionLatest() {
-        shouldLogAndMeterWhenSkippingNullLeftKey(StreamsConfig.METRICS_LATEST);
-    }
-
-    private void shouldLogAndMeterWhenSkippingNullLeftKey(final String builtInMetricsVersion) {
-        props.setProperty(StreamsConfig.BUILT_IN_METRICS_VERSION_CONFIG, builtInMetricsVersion);
-
-        try (final LogCaptureAppender appender = LogCaptureAppender.createAndRegister(KStreamKTableJoin.class)) {
-            driver = new TopologyTestDriver(builder.build(), props);
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldLogAndMeterWhenSkippingNullLeftKey(final boolean withHeaders) {
+        setUp(withHeaders);
+        try (final LogCaptureAppender appender = LogCaptureAppender.createAndRegister(KStreamKTableJoinProcessor.class)) {
             final TestInputTopic<Integer, String> inputTopic =
                 driver.createInputTopic(streamTopic, new IntegerSerializer(), new StringSerializer());
             inputTopic.pipeInput(null, "A");
 
-            if (builtInMetricsVersion.equals(StreamsConfig.METRICS_0100_TO_24)) {
-                assertEquals(
-                    1.0,
-                    getMetricByName(driver.metrics(), "skipped-records-total", "stream-metrics").metricValue()
-                );
-            }
-            assertThat(
-                appender.getMessages(),
-                hasItem("Skipping record due to null key or value. key=[null] value=[A] topic=[streamTopic] partition=[0] "
-                    + "offset=[0]"));
+            assertTrue(appender.getMessages().contains(
+                "Skipping record due to null join key or value. topic=[streamTopic] partition=[0] offset=[0]"
+            ));
         }
+
+        assertEquals(
+            1.0,
+            driver.metrics().get(
+                new MetricName(
+                    "dropped-records-total",
+                    "stream-task-metrics",
+                    "",
+                    mkMap(
+                        mkEntry("thread-id", Thread.currentThread().getName()),
+                        mkEntry("task-id", "0_0")
+                    )
+                ))
+                .metricValue()
+        );
     }
 
-    @Test
-    public void shouldLogAndMeterWhenSkippingNullLeftValueWithBuiltInMetricsVersionLatest() {
-        shouldLogAndMeterWhenSkippingNullLeftValue(StreamsConfig.METRICS_LATEST);
-    }
-
-    @Test
-    public void shouldLogAndMeterWhenSkippingNullLeftValueWithBuiltInMetricsVersion0100To24() {
-        shouldLogAndMeterWhenSkippingNullLeftValue(StreamsConfig.METRICS_0100_TO_24);
-    }
-
-    private void shouldLogAndMeterWhenSkippingNullLeftValue(final String builtInMetricsVersion) {
-        props.setProperty(StreamsConfig.BUILT_IN_METRICS_VERSION_CONFIG, StreamsConfig.METRICS_0100_TO_24);
-
-        driver = new TopologyTestDriver(builder.build(), props);
-        final TestInputTopic<Integer, String> inputTopic =
-            driver.createInputTopic(streamTopic, new IntegerSerializer(), new StringSerializer());
-
-        try (final LogCaptureAppender appender = LogCaptureAppender.createAndRegister(KStreamKTableJoin.class)) {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldLogAndMeterWhenSkippingNullLeftValue(final boolean withHeaders) {
+        setUp(withHeaders);
+        try (final LogCaptureAppender appender = LogCaptureAppender.createAndRegister(KStreamKTableJoinProcessor.class)) {
+            final TestInputTopic<Integer, String> inputTopic =
+                driver.createInputTopic(streamTopic, new IntegerSerializer(), new StringSerializer());
             inputTopic.pipeInput(1, null);
 
-            assertThat(
-                appender.getMessages(),
-                hasItem("Skipping record due to null key or value. key=[1] value=[null] topic=[streamTopic] partition=[0] "
-                    + "offset=[0]")
-            );
+            assertTrue(appender.getMessages().contains(
+                "Skipping record due to null join key or value. topic=[streamTopic] partition=[0] offset=[0]"
+            ));
         }
 
-        if (builtInMetricsVersion.equals(StreamsConfig.METRICS_0100_TO_24)) {
-            assertEquals(
-                1.0,
-                getMetricByName(driver.metrics(), "skipped-records-total", "stream-metrics").metricValue()
-            );
-        }
+        assertEquals(
+            1.0,
+            driver.metrics().get(
+                    new MetricName(
+                        "dropped-records-total",
+                        "stream-task-metrics",
+                        "",
+                        mkMap(
+                            mkEntry("thread-id", Thread.currentThread().getName()),
+                            mkEntry("task-id", "0_0")
+                        )
+                    ))
+                .metricValue()
+        );
     }
 
 
@@ -381,4 +673,5 @@ public class KStreamKTableJoinTest {
                     + "    Processor: KTABLE-SOURCE-0000000006 (stores: [topic3-STATE-STORE-0000000004])\n"
                     + "      --> none\n"
                     + "      <-- KSTREAM-SOURCE-0000000005\n\n";
+
 }

@@ -18,7 +18,6 @@ package org.apache.kafka.streams.kstream.internals.suppress;
 
 import org.apache.kafka.streams.kstream.Suppressed;
 
-import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 
@@ -28,15 +27,9 @@ public class EagerBufferConfigImpl extends BufferConfigInternal<Suppressed.Eager
     private final long maxBytes;
     private final Map<String, String> logConfig;
 
-    public EagerBufferConfigImpl(final long maxRecords, final long maxBytes) {
-        this.maxRecords = maxRecords;
-        this.maxBytes = maxBytes;
-        this.logConfig = Collections.emptyMap();
-    }
-
-    private EagerBufferConfigImpl(final long maxRecords,
-                                  final long maxBytes,
-                                  final Map<String, String> logConfig) {
+    public EagerBufferConfigImpl(final long maxRecords,
+                                 final long maxBytes,
+                                 final Map<String, String> logConfig) {
         this.maxRecords = maxRecords;
         this.maxBytes = maxBytes;
         this.logConfig = logConfig;
@@ -83,8 +76,8 @@ public class EagerBufferConfigImpl extends BufferConfigInternal<Suppressed.Eager
     }
 
     @Override
-    public Map<String, String> getLogConfig() {
-        return isLoggingEnabled() ? logConfig : Collections.emptyMap();
+    public Map<String, String> logConfig() {
+        return isLoggingEnabled() ? logConfig : Map.of();
     }
 
     @Override
@@ -97,16 +90,20 @@ public class EagerBufferConfigImpl extends BufferConfigInternal<Suppressed.Eager
         }
         final EagerBufferConfigImpl that = (EagerBufferConfigImpl) o;
         return maxRecords == that.maxRecords &&
-            maxBytes == that.maxBytes;
+            maxBytes == that.maxBytes &&
+            Objects.equals(logConfig(), that.logConfig());
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(maxRecords, maxBytes);
+        return Objects.hash(maxRecords, maxBytes, logConfig());
     }
 
     @Override
     public String toString() {
-        return "EagerBufferConfigImpl{maxRecords=" + maxRecords + ", maxBytes=" + maxBytes + '}';
+        return "EagerBufferConfigImpl{maxRecords=" + maxRecords +
+                ", maxBytes=" + maxBytes +
+                ", logConfig=" + logConfig() +
+                "}";
     }
 }

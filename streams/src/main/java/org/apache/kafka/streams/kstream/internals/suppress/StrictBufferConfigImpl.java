@@ -18,7 +18,6 @@ package org.apache.kafka.streams.kstream.internals.suppress;
 
 import org.apache.kafka.streams.kstream.Suppressed;
 
-import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 
@@ -41,30 +40,22 @@ public class StrictBufferConfigImpl extends BufferConfigInternal<Suppressed.Stri
         this.logConfig = logConfig;
     }
 
-    public StrictBufferConfigImpl(final long maxRecords,
-                                  final long maxBytes,
-                                  final BufferFullStrategy bufferFullStrategy) {
-        this.maxRecords = maxRecords;
-        this.maxBytes = maxBytes;
-        this.bufferFullStrategy = bufferFullStrategy;
-        this.logConfig = Collections.emptyMap();
-    }
 
     public StrictBufferConfigImpl() {
         this.maxRecords = Long.MAX_VALUE;
         this.maxBytes = Long.MAX_VALUE;
         this.bufferFullStrategy = SHUT_DOWN;
-        this.logConfig = Collections.emptyMap();
+        this.logConfig = Map.of();
     }
 
     @Override
     public Suppressed.StrictBufferConfig withMaxRecords(final long recordLimit) {
-        return new StrictBufferConfigImpl(recordLimit, maxBytes, bufferFullStrategy);
+        return new StrictBufferConfigImpl(recordLimit, maxBytes, bufferFullStrategy, logConfig());
     }
 
     @Override
     public Suppressed.StrictBufferConfig withMaxBytes(final long byteLimit) {
-        return new StrictBufferConfigImpl(maxRecords, byteLimit, bufferFullStrategy);
+        return new StrictBufferConfigImpl(maxRecords, byteLimit, bufferFullStrategy, logConfig());
     }
 
     @Override
@@ -98,8 +89,8 @@ public class StrictBufferConfigImpl extends BufferConfigInternal<Suppressed.Stri
     }
 
     @Override
-    public Map<String, String> getLogConfig() {
-        return isLoggingEnabled() ? logConfig : Collections.emptyMap();
+    public Map<String, String> logConfig() {
+        return isLoggingEnabled() ? logConfig : Map.of();
     }
 
     @Override
@@ -113,18 +104,21 @@ public class StrictBufferConfigImpl extends BufferConfigInternal<Suppressed.Stri
         final StrictBufferConfigImpl that = (StrictBufferConfigImpl) o;
         return maxRecords == that.maxRecords &&
             maxBytes == that.maxBytes &&
-            bufferFullStrategy == that.bufferFullStrategy;
+            bufferFullStrategy == that.bufferFullStrategy &&
+            Objects.equals(logConfig(), ((StrictBufferConfigImpl) o).logConfig());
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(maxRecords, maxBytes, bufferFullStrategy);
+        return Objects.hash(maxRecords, maxBytes, bufferFullStrategy, logConfig());
     }
 
     @Override
     public String toString() {
         return "StrictBufferConfigImpl{maxKeys=" + maxRecords +
             ", maxBytes=" + maxBytes +
-            ", bufferFullStrategy=" + bufferFullStrategy + '}';
+            ", bufferFullStrategy=" + bufferFullStrategy +
+            ", logConfig=" + logConfig().toString() +
+             '}';
     }
 }

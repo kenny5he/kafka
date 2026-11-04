@@ -20,28 +20,30 @@ import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.TestInputTopic;
+import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.TopologyTestDriver;
-import org.apache.kafka.streams.processor.Processor;
-import org.apache.kafka.streams.processor.ProcessorContext;
-import org.apache.kafka.streams.processor.ProcessorSupplier;
+import org.apache.kafka.streams.TopologyTestDriverBuilder;
 import org.apache.kafka.streams.processor.PunctuationType;
+import org.apache.kafka.streams.processor.api.Processor;
+import org.apache.kafka.streams.processor.api.ProcessorContext;
+import org.apache.kafka.streams.processor.api.ProcessorSupplier;
+import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.state.KeyValueIterator;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.state.Stores;
-import org.apache.kafka.streams.TestInputTopic;
-import org.apache.kafka.streams.TestOutputTopic;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Properties;
 
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.core.Is.is;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * This is code sample in docs/streams/developer-guide/testing.html
@@ -53,10 +55,10 @@ public class DeveloperGuideTesting {
     private TestOutputTopic<String, Long> outputTopic;
     private KeyValueStore<String, Long> store;
 
-    private Serde<String> stringSerde = new Serdes.StringSerde();
-    private Serde<Long> longSerde = new Serdes.LongSerde();
+    private final Serde<String> stringSerde = new Serdes.StringSerde();
+    private final Serde<Long> longSerde = new Serdes.LongSerde();
 
-    @Before
+    @BeforeEach
     public void setup() {
         final Topology topology = new Topology();
         topology.addSource("sourceProcessor", "input-topic");
@@ -71,11 +73,9 @@ public class DeveloperGuideTesting {
 
         // setup test driver
         final Properties props = new Properties();
-        props.setProperty(StreamsConfig.APPLICATION_ID_CONFIG, "maxAggregation");
-        props.setProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
-        props.setProperty(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
-        props.setProperty(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.Long().getClass().getName());
-        testDriver = new TopologyTestDriver(topology, props);
+        props.setProperty(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.StringSerde.class.getName());
+        props.setProperty(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.LongSerde.class.getName());
+        testDriver = new TopologyTestDriverBuilder(topology).withConfig(props).build();
 
         // setup test topics
         inputTopic = testDriver.createInputTopic("input-topic", stringSerde.serializer(), longSerde.serializer());
@@ -86,7 +86,7 @@ public class DeveloperGuideTesting {
         store.put("a", 21L);
     }
 
-    @After
+    @AfterEach
     public void tearDown() {
         testDriver.close();
     }
@@ -95,93 +95,90 @@ public class DeveloperGuideTesting {
     @Test
     public void shouldFlushStoreForFirstInput() {
         inputTopic.pipeInput("a", 1L);
-        assertThat(outputTopic.readKeyValue(), equalTo(new KeyValue<>("a", 21L)));
-        assertThat(outputTopic.isEmpty(), is(true));
+        assertEquals(new KeyValue<>("a", 21L), outputTopic.readKeyValue());
+        assertTrue(outputTopic.isEmpty());
     }
 
     @Test
     public void shouldNotUpdateStoreForSmallerValue() {
         inputTopic.pipeInput("a", 1L);
-        assertThat(store.get("a"), equalTo(21L));
-        assertThat(outputTopic.readKeyValue(), equalTo(new KeyValue<>("a", 21L)));
-        assertThat(outputTopic.isEmpty(), is(true));
+        assertEquals(21L, store.get("a"));
+        assertEquals(new KeyValue<>("a", 21L), outputTopic.readKeyValue());
+        assertTrue(outputTopic.isEmpty());
     }
 
     @Test
     public void shouldNotUpdateStoreForLargerValue() {
         inputTopic.pipeInput("a", 42L);
-        assertThat(store.get("a"), equalTo(42L));
-        assertThat(outputTopic.readKeyValue(), equalTo(new KeyValue<>("a", 42L)));
-        assertThat(outputTopic.isEmpty(), is(true));
+        assertEquals(42L, store.get("a"));
+        assertEquals(new KeyValue<>("a", 42L), outputTopic.readKeyValue());
+        assertTrue(outputTopic.isEmpty());
     }
 
     @Test
     public void shouldUpdateStoreForNewKey() {
         inputTopic.pipeInput("b", 21L);
-        assertThat(store.get("b"), equalTo(21L));
-        assertThat(outputTopic.readKeyValue(), equalTo(new KeyValue<>("a", 21L)));
-        assertThat(outputTopic.readKeyValue(), equalTo(new KeyValue<>("b", 21L)));
-        assertThat(outputTopic.isEmpty(), is(true));
+        assertEquals(21L, store.get("b"));
+        assertEquals(new KeyValue<>("a", 21L), outputTopic.readKeyValue());
+        assertEquals(new KeyValue<>("b", 21L), outputTopic.readKeyValue());
+        assertTrue(outputTopic.isEmpty());
     }
 
     @Test
     public void shouldPunctuateIfEvenTimeAdvances() {
         final Instant recordTime = Instant.now();
         inputTopic.pipeInput("a", 1L,  recordTime);
-        assertThat(outputTopic.readKeyValue(), equalTo(new KeyValue<>("a", 21L)));
+        assertEquals(new KeyValue<>("a", 21L), outputTopic.readKeyValue());
 
         inputTopic.pipeInput("a", 1L,  recordTime);
-        assertThat(outputTopic.isEmpty(), is(true));
+        assertTrue(outputTopic.isEmpty());
 
         inputTopic.pipeInput("a", 1L, recordTime.plusSeconds(10L));
-        assertThat(outputTopic.readKeyValue(), equalTo(new KeyValue<>("a", 21L)));
-        assertThat(outputTopic.isEmpty(), is(true));
+        assertEquals(new KeyValue<>("a", 21L), outputTopic.readKeyValue());
+        assertTrue(outputTopic.isEmpty());
     }
 
     @Test
     public void shouldPunctuateIfWallClockTimeAdvances() {
         testDriver.advanceWallClockTime(Duration.ofSeconds(60));
-        assertThat(outputTopic.readKeyValue(), equalTo(new KeyValue<>("a", 21L)));
-        assertThat(outputTopic.isEmpty(), is(true));
+        assertEquals(new KeyValue<>("a", 21L), outputTopic.readKeyValue());
+        assertTrue(outputTopic.isEmpty());
     }
 
-    public static class CustomMaxAggregatorSupplier implements ProcessorSupplier<String, Long> {
+    public static class CustomMaxAggregatorSupplier implements ProcessorSupplier<String, Long, String, Long> {
         @Override
-        public Processor<String, Long> get() {
+        public Processor<String, Long, String, Long> get() {
             return new CustomMaxAggregator();
         }
     }
 
-    public static class CustomMaxAggregator implements Processor<String, Long> {
-        ProcessorContext context;
+    public static class CustomMaxAggregator implements Processor<String, Long, String, Long> {
+        ProcessorContext<String, Long> context;
         private KeyValueStore<String, Long> store;
 
-        @SuppressWarnings("unchecked")
         @Override
-        public void init(final ProcessorContext context) {
+        public void init(final ProcessorContext<String, Long> context) {
             this.context = context;
-            context.schedule(Duration.ofSeconds(60), PunctuationType.WALL_CLOCK_TIME, time -> flushStore());
-            context.schedule(Duration.ofSeconds(10), PunctuationType.STREAM_TIME, time -> flushStore());
-            store = (KeyValueStore<String, Long>) context.getStateStore("aggStore");
+            context.schedule(Duration.ofSeconds(60), PunctuationType.WALL_CLOCK_TIME, this::flushStore);
+            context.schedule(Duration.ofSeconds(10), PunctuationType.STREAM_TIME, this::flushStore);
+            store = context.getStateStore("aggStore");
         }
 
         @Override
-        public void process(final String key, final Long value) {
-            final Long oldValue = store.get(key);
-            if (oldValue == null || value > oldValue) {
-                store.put(key, value);
+        public void process(final Record<String, Long> record) {
+            final Long oldValue = store.get(record.key());
+            if (oldValue == null || record.value() > oldValue) {
+                store.put(record.key(), record.value());
             }
         }
 
-        private void flushStore() {
-            final KeyValueIterator<String, Long> it = store.all();
-            while (it.hasNext()) {
-                final KeyValue<String, Long> next = it.next();
-                context.forward(next.key, next.value);
+        private void flushStore(final long timestamp) {
+            try (final KeyValueIterator<String, Long> it = store.all()) {
+                while (it.hasNext()) {
+                    final KeyValue<String, Long> next = it.next();
+                    context.forward(new Record<>(next.key, next.value, timestamp));
+                }
             }
         }
-
-        @Override
-        public void close() {}
     }
 }

@@ -16,8 +16,10 @@
  */
 package org.apache.kafka.streams.kstream.internals;
 
-import org.apache.kafka.streams.processor.ProcessorContext;
-import org.apache.kafka.streams.processor.To;
+import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.header.internals.RecordHeaders;
+import org.apache.kafka.streams.processor.api.ProcessorContext;
+import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.processor.internals.InternalProcessorContext;
 import org.apache.kafka.streams.processor.internals.ProcessorNode;
 import org.apache.kafka.streams.state.ValueAndTimestamp;
@@ -25,27 +27,31 @@ import org.apache.kafka.streams.state.internals.CacheFlushListener;
 
 import static org.apache.kafka.streams.state.ValueAndTimestamp.getValueOrNull;
 
-class TimestampedCacheFlushListener<K, V> implements CacheFlushListener<K, ValueAndTimestamp<V>> {
-    private final InternalProcessorContext context;
-    private final ProcessorNode myNode;
+class TimestampedCacheFlushListener<KOut, VOut> implements CacheFlushListener<KOut, ValueAndTimestamp<VOut>> {
+    private final InternalProcessorContext<KOut, Change<VOut>> context;
+    private final ProcessorNode<?, ?, ?, ?> myNode;
 
-    TimestampedCacheFlushListener(final ProcessorContext context) {
-        this.context = (InternalProcessorContext) context;
+    TimestampedCacheFlushListener(final ProcessorContext<KOut, Change<VOut>> context) {
+        this.context = (InternalProcessorContext<KOut, Change<VOut>>) context;
         myNode = this.context.currentNode();
     }
 
     @Override
-    public void apply(final K key,
-                      final ValueAndTimestamp<V> newValue,
-                      final ValueAndTimestamp<V> oldValue,
-                      final long timestamp) {
-        final ProcessorNode prev = context.currentNode();
+    public void apply(final Record<KOut, Change<ValueAndTimestamp<VOut>>> record) {
+        final ProcessorNode<?, ?, ?, ?> prev = context.currentNode();
         context.setCurrentNode(myNode);
         try {
+            final VOut newValue = getValueOrNull(record.value().newValue);
+            final VOut oldValue = getValueOrNull(record.value().oldValue);
+            final long timestamp = record.value().newValue != null ? record.value().newValue.timestamp() : record.timestamp();
+            final Headers headers = record.headers() != null ? record.headers() : new RecordHeaders();
+
             context.forward(
-                key,
-                new Change<>(getValueOrNull(newValue), getValueOrNull(oldValue)),
-                To.all().withTimestamp(newValue != null ? newValue.timestamp() : timestamp));
+                record
+                    .withValue(new Change<>(newValue, oldValue, record.value().isLatest))
+                    .withTimestamp(timestamp)
+                    .withHeaders(headers)
+            );
         } finally {
             context.setCurrentNode(prev);
         }

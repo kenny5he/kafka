@@ -19,99 +19,90 @@ package org.apache.kafka.streams.kstream.internals;
 import org.apache.kafka.common.serialization.IntegerSerializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.apache.kafka.common.utils.LogCaptureAppender;
+import org.apache.kafka.common.utils.MockTime;
 import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.KeyValueTimestamp;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.TopologyTestDriverBuilder;
 import org.apache.kafka.streams.TopologyWrapper;
 import org.apache.kafka.streams.errors.StreamsException;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.JoinWindows;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.StreamJoined;
-import org.apache.kafka.streams.processor.internals.testutil.LogCaptureAppender;
-import org.apache.kafka.streams.TestInputTopic;
+import org.apache.kafka.streams.processor.api.Processor;
+import org.apache.kafka.streams.processor.api.Record;
+import org.apache.kafka.streams.processor.internals.InternalTopicConfig;
+import org.apache.kafka.streams.processor.internals.InternalTopologyBuilder;
+import org.apache.kafka.streams.processor.internals.StoreBuilderWrapper;
+import org.apache.kafka.streams.state.BuiltInDslStoreSuppliers;
+import org.apache.kafka.streams.state.DslWindowParams;
+import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.state.Stores;
+import org.apache.kafka.streams.state.TimestampedWindowStoreWithHeaders;
 import org.apache.kafka.streams.state.WindowBytesStoreSupplier;
-import org.apache.kafka.test.MockProcessor;
-import org.apache.kafka.test.MockProcessorSupplier;
+import org.apache.kafka.streams.state.internals.InMemoryKeyValueBytesStoreSupplier;
+import org.apache.kafka.streams.state.internals.InMemoryWindowBytesStoreSupplier;
+import org.apache.kafka.streams.state.internals.KeyValueStoreBuilder;
+import org.apache.kafka.streams.state.internals.LeftOrRightValue;
+import org.apache.kafka.streams.state.internals.LeftOrRightValueSerde;
+import org.apache.kafka.streams.state.internals.TimestampedKeyAndJoinSide;
+import org.apache.kafka.streams.state.internals.TimestampedKeyAndJoinSideSerde;
+import org.apache.kafka.streams.state.internals.TimestampedWindowStoreWithHeadersBuilder;
+import org.apache.kafka.streams.state.internals.WrappedStateStore;
+import org.apache.kafka.test.GenericInMemoryKeyValueStore;
+import org.apache.kafka.test.MockApiProcessor;
+import org.apache.kafka.test.MockApiProcessorSupplier;
+import org.apache.kafka.test.MockInternalProcessorContext;
 import org.apache.kafka.test.MockValueJoiner;
 import org.apache.kafka.test.StreamsTestUtils;
-import org.junit.Test;
+
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.Mockito;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.HashSet;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
+import java.util.Spliterator;
+import java.util.Spliterators;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
+import static java.time.Duration.ofHours;
 import static java.time.Duration.ofMillis;
-import static org.apache.kafka.test.StreamsTestUtils.getMetricByName;
-import static org.hamcrest.CoreMatchers.hasItem;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.apache.kafka.streams.processor.internals.assignment.AssignmentTestUtils.SUBTOPOLOGY_0;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class KStreamKStreamJoinTest {
-    private final static KeyValueTimestamp<?, ?>[] EMPTY = new KeyValueTimestamp[0];
-
     private final String topic1 = "topic1";
     private final String topic2 = "topic2";
     private final Consumed<Integer, String> consumed = Consumed.with(Serdes.Integer(), Serdes.String());
-    private final Properties props = StreamsTestUtils.getStreamsConfig(Serdes.String(), Serdes.String());
-
-    private final JoinWindows joinWindows = JoinWindows.of(ofMillis(50)).grace(Duration.ofMillis(50));
+    private Properties props = StreamsTestUtils.getStreamsConfig(Serdes.String(), Serdes.String());
+    private final JoinWindows joinWindows = JoinWindows.ofTimeDifferenceAndGrace(ofMillis(50), Duration.ofMillis(50));
     private final StreamJoined<String, Integer, Integer> streamJoined = StreamJoined.with(Serdes.String(), Serdes.Integer(), Serdes.Integer());
     private final String errorMessagePrefix = "Window settings mismatch. WindowBytesStoreSupplier settings";
 
-    @Test
-    public void shouldLogAndMeterOnSkippedRecordsWithNullValueWithBuiltInMetricsVersion0100To24() {
-        shouldLogAndMeterOnSkippedRecordsWithNullValue(StreamsConfig.METRICS_0100_TO_24);
-    }
-
-    @Test
-    public void shouldLogAndMeterOnSkippedRecordsWithNullValueWithBuiltInMetricsVersionLatest() {
-        shouldLogAndMeterOnSkippedRecordsWithNullValue(StreamsConfig.METRICS_LATEST);
-    }
-
-
-    @Test
-    public void shouldReuseRepartitionTopicWithGeneratedName() {
-        final StreamsBuilder builder = new StreamsBuilder();
-        final Properties props = new Properties();
-        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION, StreamsConfig.NO_OPTIMIZATION);
-        final KStream<String, String> stream1 = builder.stream("topic", Consumed.with(Serdes.String(), Serdes.String()));
-        final KStream<String, String> stream2 = builder.stream("topic2", Consumed.with(Serdes.String(), Serdes.String()));
-        final KStream<String, String> stream3 = builder.stream("topic3", Consumed.with(Serdes.String(), Serdes.String()));
-        final KStream<String, String> newStream = stream1.map((k, v) -> new KeyValue<>(v, k));
-        newStream.join(stream2, (value1, value2) -> value1 + value2, JoinWindows.of(ofMillis(100))).to("out-one");
-        newStream.join(stream3, (value1, value2) -> value1 + value2, JoinWindows.of(ofMillis(100))).to("out-to");
-        assertEquals(expectedTopologyWithGeneratedRepartitionTopic, builder.build(props).describe().toString());
-    }
-
-    @Test
-    public void shouldCreateRepartitionTopicsWithUserProvidedName() {
-        final StreamsBuilder builder = new StreamsBuilder();
-        final Properties props = new Properties();
-        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION, StreamsConfig.NO_OPTIMIZATION);
-        final KStream<String, String> stream1 = builder.stream("topic", Consumed.with(Serdes.String(), Serdes.String()));
-        final KStream<String, String> stream2 = builder.stream("topic2", Consumed.with(Serdes.String(), Serdes.String()));
-        final KStream<String, String> stream3 = builder.stream("topic3", Consumed.with(Serdes.String(), Serdes.String()));
-        final KStream<String, String> newStream = stream1.map((k, v) -> new KeyValue<>(v, k));
-        final StreamJoined<String, String, String> streamJoined = StreamJoined.with(Serdes.String(), Serdes.String(), Serdes.String());
-        newStream.join(stream2, (value1, value2) -> value1 + value2, JoinWindows.of(ofMillis(100)), streamJoined.withName("first-join")).to("out-one");
-        newStream.join(stream3, (value1, value2) -> value1 + value2, JoinWindows.of(ofMillis(100)), streamJoined.withName("second-join")).to("out-two");
-        final Topology topology =  builder.build(props);
-        System.out.println(topology.describe().toString());
-        assertEquals(expectedTopologyWithUserNamedRepartitionTopics, topology.describe().toString());
-    }
-
-    private void shouldLogAndMeterOnSkippedRecordsWithNullValue(final String builtInMetricsVersion) {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldLogAndMeterOnSkippedRecordsWithNullValueWithBuiltInMetricsVersionLatest(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final KStream<String, Integer> left = builder.stream("left", Consumed.with(Serdes.String(), Serdes.Integer()));
@@ -120,107 +111,216 @@ public class KStreamKStreamJoinTest {
         left.join(
             right,
             Integer::sum,
-            JoinWindows.of(ofMillis(100)),
+            JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(100)),
             StreamJoined.with(Serdes.String(), Serdes.Integer(), Serdes.Integer())
         );
 
-        props.setProperty(StreamsConfig.BUILT_IN_METRICS_VERSION_CONFIG, builtInMetricsVersion);
+        props.setProperty(StreamsConfig.BUILT_IN_METRICS_VERSION_CONFIG, StreamsConfig.METRICS_LATEST);
 
         try (final LogCaptureAppender appender = LogCaptureAppender.createAndRegister(KStreamKStreamJoin.class);
-             final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+             final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
 
             final TestInputTopic<String, Integer> inputTopic =
-                    driver.createInputTopic("left", new StringSerializer(), new IntegerSerializer());
+                driver.createInputTopic("left", new StringSerializer(), new IntegerSerializer());
             inputTopic.pipeInput("A", null);
 
-            assertThat(
-                appender.getMessages(),
-                hasItem("Skipping record due to null key or value. key=[A] value=[null] topic=[left] partition=[0] "
-                    + "offset=[0]")
-            );
-
-            if (StreamsConfig.METRICS_0100_TO_24.equals(builtInMetricsVersion)) {
-                assertEquals(
-                    1.0,
-                    getMetricByName(
-                        driver.metrics(),
-                        "skipped-records-total",
-                        "stream-metrics"
-                    ).metricValue()
-                );
-            }
+            assertTrue(appender.getMessages().contains(
+                "Skipping record due to null key or value. topic=[left] partition=[0] offset=[0]"
+            ));
         }
     }
 
-    @Test
-    public void shouldThrowExceptionThisStoreSupplierRetentionDoNotMatchWindowsSizeAndGrace() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldReuseRepartitionTopicWithGeneratedName(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
+        final StreamsBuilder builder = new StreamsBuilder();
+        final Properties props = new Properties();
+        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.NO_OPTIMIZATION);
+        final KStream<String, String> stream1 = builder.stream("topic", Consumed.with(Serdes.String(), Serdes.String()));
+        final KStream<String, String> stream2 = builder.stream("topic2", Consumed.with(Serdes.String(), Serdes.String()));
+        final KStream<String, String> stream3 = builder.stream("topic3", Consumed.with(Serdes.String(), Serdes.String()));
+        final KStream<String, String> newStream = stream1.map((k, v) -> new KeyValue<>(v, k));
+        newStream.join(stream2, (value1, value2) -> value1 + value2, JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(100))).to("out-one");
+        newStream.join(stream3, (value1, value2) -> value1 + value2, JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(100))).to("out-to");
+        assertEquals(expectedTopologyWithGeneratedRepartitionTopic, builder.build(props).describe().toString());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldCreateRepartitionTopicsWithUserProvidedName(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
+        final StreamsBuilder builder = new StreamsBuilder();
+        final Properties props = new Properties();
+        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.NO_OPTIMIZATION);
+        final KStream<String, String> stream1 = builder.stream("topic", Consumed.with(Serdes.String(), Serdes.String()));
+        final KStream<String, String> stream2 = builder.stream("topic2", Consumed.with(Serdes.String(), Serdes.String()));
+        final KStream<String, String> stream3 = builder.stream("topic3", Consumed.with(Serdes.String(), Serdes.String()));
+        final KStream<String, String> newStream = stream1.map((k, v) -> new KeyValue<>(v, k));
+        final StreamJoined<String, String, String> streamJoined = StreamJoined.with(Serdes.String(), Serdes.String(), Serdes.String());
+        newStream.join(stream2, (value1, value2) -> value1 + value2, JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(100)), streamJoined.withName("first-join")).to("out-one");
+        newStream.join(stream3, (value1, value2) -> value1 + value2, JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(100)), streamJoined.withName("second-join")).to("out-two");
+        final Topology topology =  builder.build(props);
+        System.out.println(topology.describe().toString());
+        assertEquals(expectedTopologyWithUserNamedRepartitionTopics, topology.describe().toString());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldDisableLoggingOnStreamJoined(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
+        final JoinWindows joinWindows = JoinWindows.ofTimeDifferenceAndGrace(ofMillis(100), Duration.ofMillis(50));
+        final StreamJoined<String, Integer, Integer> streamJoined = StreamJoined
+            .with(Serdes.String(), Serdes.Integer(), Serdes.Integer())
+            .withStoreName("store")
+            .withLoggingDisabled();
+
+        final StreamsBuilder builder = new StreamsBuilder();
+        final KStream<String, Integer> left = builder.stream("left", Consumed.with(Serdes.String(), Serdes.Integer()));
+        final KStream<String, Integer> right = builder.stream("right", Consumed.with(Serdes.String(), Serdes.Integer()));
+
+        left.join(
+            right,
+            Integer::sum,
+            joinWindows,
+            streamJoined
+        );
+
+        final Topology topology = builder.build();
+        final InternalTopologyBuilder internalTopologyBuilder = TopologyWrapper.getInternalTopologyBuilder(topology);
+
+        assertFalse(internalTopologyBuilder.stateStores().get("store-this-join-store").loggingEnabled());
+        assertFalse(internalTopologyBuilder.stateStores().get("store-other-join-store").loggingEnabled());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldEnableLoggingWithCustomConfigOnStreamJoined(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
+        final JoinWindows joinWindows = JoinWindows.ofTimeDifferenceAndGrace(ofMillis(100), Duration.ofMillis(50));
+        final StreamJoined<String, Integer, Integer> streamJoined = StreamJoined
+            .with(Serdes.String(), Serdes.Integer(), Serdes.Integer())
+            .withStoreName("store")
+            .withLoggingEnabled(Collections.singletonMap("test", "property"));
+
+        final StreamsBuilder builder = new StreamsBuilder();
+        final KStream<String, Integer> left = builder.stream("left", Consumed.with(Serdes.String(), Serdes.Integer()));
+        final KStream<String, Integer> right = builder.stream("right", Consumed.with(Serdes.String(), Serdes.Integer()));
+
+        left.join(
+            right,
+            Integer::sum,
+            joinWindows,
+            streamJoined
+        );
+
+        final Topology topology = builder.build();
+        final InternalTopologyBuilder internalTopologyBuilder = TopologyWrapper.getInternalTopologyBuilder(topology);
+
+        internalTopologyBuilder.buildSubtopology(0);
+
+        assertTrue(internalTopologyBuilder.stateStores().get("store-this-join-store").loggingEnabled());
+        assertTrue(internalTopologyBuilder.stateStores().get("store-other-join-store").loggingEnabled());
+        assertEquals(2, internalTopologyBuilder.subtopologyToTopicsInfo().get(SUBTOPOLOGY_0).stateChangelogTopics.size());
+        for (final InternalTopicConfig config : internalTopologyBuilder.subtopologyToTopicsInfo().get(SUBTOPOLOGY_0).stateChangelogTopics.values()) {
+            assertEquals("property", config.properties(Collections.emptyMap(), 0).get("test"));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldThrowExceptionThisStoreSupplierRetentionDoNotMatchWindowsSizeAndGrace(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
         // Case where retention of thisJoinStore doesn't match JoinWindows
-        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 500, 100, true);
-        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store-other", 150, 100, true);
+        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 500L, 100L, true);
+        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store-other", 150L, 100L, true);
 
-
-        buildStreamsJoinThatShouldThrow(streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
+        buildStreamsJoinThatShouldThrow(
+            streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
             joinWindows,
-            errorMessagePrefix);
+            errorMessagePrefix
+        );
     }
 
-    @Test
-    public void shouldThrowExceptionThisStoreSupplierWindowSizeDoesNotMatchJoinWindowsWindowSize() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldThrowExceptionThisStoreSupplierWindowSizeDoesNotMatchJoinWindowsWindowSize(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
         //Case where window size of thisJoinStore doesn't match JoinWindows
-        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150, 150, true);
-        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store-other", 150, 100, true);
+        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150L, 150L, true);
+        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store-other", 150L, 100L, true);
 
-        buildStreamsJoinThatShouldThrow(streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
+        buildStreamsJoinThatShouldThrow(
+            streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
             joinWindows,
-            errorMessagePrefix);
+            errorMessagePrefix
+        );
     }
 
-    @Test
-    public void shouldThrowExceptionWhenThisJoinStoreSetsRetainDuplicatesFalse() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldThrowExceptionWhenThisJoinStoreSetsRetainDuplicatesFalse(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
         //Case where thisJoinStore retain duplicates false
-        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150, 100, false);
-        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store-other", 150, 100, true);
+        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150L, 100L, false);
+        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store-other", 150L, 100L, true);
 
-        buildStreamsJoinThatShouldThrow(streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
+        buildStreamsJoinThatShouldThrow(
+            streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
             joinWindows,
-            "The StoreSupplier must set retainDuplicates=true, found retainDuplicates=false");
+            "The StoreSupplier must set retainDuplicates=true, found retainDuplicates=false"
+        );
     }
 
-    @Test
-    public void shouldThrowExceptionOtherStoreSupplierRetentionDoNotMatchWindowsSizeAndGrace() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldThrowExceptionOtherStoreSupplierRetentionDoNotMatchWindowsSizeAndGrace(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
         //Case where retention size of otherJoinStore doesn't match JoinWindows
-        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150, 100, true);
-        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store-other", 500, 100, true);
+        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150L, 100L, true);
+        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store-other", 500L, 100L, true);
 
-        buildStreamsJoinThatShouldThrow(streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
+        buildStreamsJoinThatShouldThrow(
+            streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
             joinWindows,
-            errorMessagePrefix);
+            errorMessagePrefix
+        );
     }
 
-    @Test
-    public void shouldThrowExceptionOtherStoreSupplierWindowSizeDoesNotMatchJoinWindowsWindowSize() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldThrowExceptionOtherStoreSupplierWindowSizeDoesNotMatchJoinWindowsWindowSize(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
         //Case where window size of otherJoinStore doesn't match JoinWindows
-        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150, 100, true);
-        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store-other", 150, 150, true);
+        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150L, 100L, true);
+        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store-other", 150L, 150L, true);
 
-        buildStreamsJoinThatShouldThrow(streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
+        buildStreamsJoinThatShouldThrow(
+            streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
             joinWindows,
-            errorMessagePrefix);
+            errorMessagePrefix
+        );
     }
 
-    @Test
-    public void shouldThrowExceptionWhenOtherJoinStoreSetsRetainDuplicatesFalse() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldThrowExceptionWhenOtherJoinStoreSetsRetainDuplicatesFalse(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
         //Case where otherJoinStore retain duplicates false
-        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150, 100, true);
-        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store-other", 150, 100, false);
+        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150L, 100L, true);
+        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store-other", 150L, 100L, false);
 
-        buildStreamsJoinThatShouldThrow(streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
+        buildStreamsJoinThatShouldThrow(
+            streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
             joinWindows,
-            "The StoreSupplier must set retainDuplicates=true, found retainDuplicates=false");
+            "The StoreSupplier must set retainDuplicates=true, found retainDuplicates=false"
+        );
     }
 
-    @Test
-    public void shouldBuildJoinWithCustomStoresAndCorrectWindowSettings() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldBuildJoinWithCustomStoresAndCorrectWindowSettings(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
         //Case where everything matches up
         final StreamsBuilder builder = new StreamsBuilder();
         final KStream<String, Integer> left = builder.stream("left", Consumed.with(Serdes.String(), Serdes.Integer()));
@@ -229,35 +329,47 @@ public class KStreamKStreamJoinTest {
         left.join(right,
             Integer::sum,
             joinWindows,
-            streamJoined);
+            streamJoined
+        );
 
         builder.build();
     }
 
-    @Test
-    public void shouldExceptionWhenJoinStoresDontHaveUniqueNames() {
-        final JoinWindows joinWindows = JoinWindows.of(ofMillis(100)).grace(Duration.ofMillis(50));
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldExceptionWhenJoinStoresDoNotHaveUniqueNames(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
+        final JoinWindows joinWindows = JoinWindows.ofTimeDifferenceAndGrace(ofMillis(100L), Duration.ofMillis(50L));
         final StreamJoined<String, Integer, Integer> streamJoined = StreamJoined.with(Serdes.String(), Serdes.Integer(), Serdes.Integer());
-        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150, 100, true);
-        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150, 100, true);
+        final WindowBytesStoreSupplier thisStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150L, 100L, true);
+        final WindowBytesStoreSupplier otherStoreSupplier = buildWindowBytesStoreSupplier("in-memory-join-store", 150L, 100L, true);
 
-        buildStreamsJoinThatShouldThrow(streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
+        buildStreamsJoinThatShouldThrow(
+            streamJoined.withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier),
             joinWindows,
-            "Both StoreSuppliers have the same name.  StoreSuppliers must provide unique names");
+            "Both StoreSuppliers have the same name.  StoreSuppliers must provide unique names"
+        );
     }
 
-    @Test
-    public void shouldJoinWithCustomStoreSuppliers() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldJoinWithCustomStoreSuppliers(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
+        final JoinWindows joinWindows = JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(100L));
 
-        final JoinWindows joinWindows = JoinWindows.of(ofMillis(100));
-
-        final WindowBytesStoreSupplier thisStoreSupplier = Stores.inMemoryWindowStore("in-memory-join-store",
+        final WindowBytesStoreSupplier thisStoreSupplier = Stores.inMemoryWindowStore(
+            "in-memory-join-store",
             Duration.ofMillis(joinWindows.size() + joinWindows.gracePeriodMs()),
-            Duration.ofMillis(joinWindows.size()), true);
+            Duration.ofMillis(joinWindows.size()),
+            true
+        );
 
-        final WindowBytesStoreSupplier otherStoreSupplier = Stores.inMemoryWindowStore("in-memory-join-store-other",
+        final WindowBytesStoreSupplier otherStoreSupplier = Stores.inMemoryWindowStore(
+            "in-memory-join-store-other",
             Duration.ofMillis(joinWindows.size() + joinWindows.gracePeriodMs()),
-            Duration.ofMillis(joinWindows.size()), true);
+            Duration.ofMillis(joinWindows.size()),
+            true
+        );
 
         final StreamJoined<String, Integer, Integer> streamJoined = StreamJoined.with(Serdes.String(), Serdes.Integer(), Serdes.Integer());
 
@@ -269,8 +381,183 @@ public class KStreamKStreamJoinTest {
 
         //Case with other stream store supplier
         runJoin(streamJoined.withOtherStoreSupplier(otherStoreSupplier), joinWindows);
+    }
 
+    public static class TrackingDslStoreSuppliers extends BuiltInDslStoreSuppliers.InMemoryDslStoreSuppliers {
 
+        public static final AtomicInteger NUM_CALLS = new AtomicInteger();
+
+        @Override
+        public WindowBytesStoreSupplier windowStore(final DslWindowParams params) {
+            NUM_CALLS.incrementAndGet();
+            return super.windowStore(params);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldJoinWithDslStoreSuppliersIfNoStoreSupplied(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
+        TrackingDslStoreSuppliers.NUM_CALLS.set(0);
+        final JoinWindows joinWindows = JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(100L));
+
+        final StreamJoined<String, Integer, Integer> streamJoined = StreamJoined.with(Serdes.String(), Serdes.Integer(), Serdes.Integer());
+        final TrackingDslStoreSuppliers dslStoreSuppliers = new TrackingDslStoreSuppliers();
+
+        final WindowBytesStoreSupplier thisStoreSupplier = Stores.inMemoryWindowStore(
+                "in-memory-join-store-other",
+                Duration.ofMillis(joinWindows.size() + joinWindows.gracePeriodMs()),
+                Duration.ofMillis(joinWindows.size()),
+                true
+        );
+        final WindowBytesStoreSupplier otherStoreSupplier = Stores.inMemoryWindowStore(
+                "in-memory-join-store",
+                Duration.ofMillis(joinWindows.size() + joinWindows.gracePeriodMs()),
+                Duration.ofMillis(joinWindows.size()),
+                true
+        );
+
+        // neither side is supplied explicitly
+        runJoin(streamJoined.withDslStoreSuppliers(dslStoreSuppliers), joinWindows);
+        assertEquals(2, TrackingDslStoreSuppliers.NUM_CALLS.get());
+
+        // one side is supplied explicitly, so we only increment once
+        runJoin(streamJoined.withDslStoreSuppliers(dslStoreSuppliers).withThisStoreSupplier(thisStoreSupplier), joinWindows);
+        assertEquals(3, TrackingDslStoreSuppliers.NUM_CALLS.get());
+
+        // both sides are supplied explicitly, so we don't increment further
+        runJoin(streamJoined.withDslStoreSuppliers(dslStoreSuppliers)
+                .withThisStoreSupplier(thisStoreSupplier).withOtherStoreSupplier(otherStoreSupplier), joinWindows);
+        assertEquals(3, TrackingDslStoreSuppliers.NUM_CALLS.get());
+
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldJoinWithDslStoreSuppliersFromStreamsConfig(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
+        TrackingDslStoreSuppliers.NUM_CALLS.set(0);
+        final JoinWindows joinWindows = JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(100L));
+
+        final StreamJoined<String, Integer, Integer> streamJoined =
+                StreamJoined.with(Serdes.String(), Serdes.Integer(), Serdes.Integer());
+        props.setProperty(StreamsConfig.DSL_STORE_SUPPLIERS_CLASS_CONFIG, TrackingDslStoreSuppliers.class.getName());
+
+        // neither side is supplied explicitly, so we call the dsl supplier twice
+        runJoin(streamJoined, joinWindows);
+        assertEquals(2, TrackingDslStoreSuppliers.NUM_CALLS.get());
+    }
+
+    public static class CapturingStoreSuppliers extends BuiltInDslStoreSuppliers.RocksDBDslStoreSuppliers {
+
+        final AtomicReference<WindowBytesStoreSupplier> capture = new AtomicReference<>();
+
+        @Override
+        public WindowBytesStoreSupplier windowStore(final DslWindowParams params) {
+            final WindowBytesStoreSupplier store = super.windowStore(params);
+            capture.set(store);
+            return store;
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldCreateCorrectWindowStoreTypeBasedOnConfiguration(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
+        final JoinWindows joinWindows = JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(100L));
+
+        final CapturingStoreSuppliers storeSuppliers = new CapturingStoreSuppliers();
+        final StreamJoined<String, Integer, Integer> streamJoined =
+                StreamJoined.with(Serdes.String(), Serdes.Integer(), Serdes.Integer())
+                        .withDslStoreSuppliers(storeSuppliers);
+
+        runJoin(streamJoined, joinWindows);
+        if (withHeaders) {
+            assertTrue(
+                WrappedStateStore.isHeadersAware(storeSuppliers.capture.get().get()),
+                "Expected stream joined to supply builders that create headers stores"
+            );
+        } else {
+            assertFalse(
+                WrappedStateStore.isTimestamped(storeSuppliers.capture.get().get()),
+                "Expected stream joined to supply builders that create non-timestamped stores"
+            );
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldThrottleEmitNonJoinedOuterRecordsEvenWhenClockDrift(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
+        /*
+         * This test is testing something internal to [[KStreamKStreamJoin]], so we had to setup low-level api manually.
+         */
+        final KStreamImplJoin.TimeTrackerSupplier tracker = new KStreamImplJoin.TimeTrackerSupplier();
+        final TimestampedWindowStoreWithHeadersBuilder<String, String> otherStoreBuilder = new TimestampedWindowStoreWithHeadersBuilder<>(
+            new InMemoryWindowBytesStoreSupplier(
+                "other",
+                1000L,
+                100,
+                false),
+            Serdes.String(),
+            Serdes.String(),
+            new MockTime());
+        final KeyValueStoreBuilder<TimestampedKeyAndJoinSide<String>, LeftOrRightValue<String, String>> outerStoreBuilder = new KeyValueStoreBuilder<>(
+            new InMemoryKeyValueBytesStoreSupplier("outer"),
+            new TimestampedKeyAndJoinSideSerde<>(Serdes.String()),
+            new LeftOrRightValueSerde<>(Serdes.String(), Serdes.String()),
+            new MockTime()
+        );
+        final KStreamKStreamJoinRightSide<String, String, String, String> join = new KStreamKStreamJoinRightSide<>(
+            new JoinWindowsInternal(JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(1000))),
+            (key, v1, v2) -> v1 + v2,
+            true,
+            tracker,
+            StoreBuilderWrapper.wrapStoreBuilder(otherStoreBuilder),
+            Optional.of(StoreBuilderWrapper.wrapStoreBuilder(outerStoreBuilder)));
+
+        final Processor<String, String, String, String> joinProcessor = join.get();
+        final MockInternalProcessorContext<String, String> procCtx = new MockInternalProcessorContext<>();
+        final TimestampedWindowStoreWithHeaders<String, String> otherStore = otherStoreBuilder.build();
+
+        final KeyValueStore<TimestampedKeyAndJoinSide<String>, LeftOrRightValue<String, String>> outerStore =
+            Mockito.spy(outerStoreBuilder.build());
+
+        final GenericInMemoryKeyValueStore<String, String> rootStore = new GenericInMemoryKeyValueStore<>("root");
+
+        otherStore.init(procCtx, rootStore);
+        procCtx.addStateStore(otherStore);
+
+        outerStore.init(procCtx, rootStore);
+        procCtx.addStateStore(outerStore);
+
+        joinProcessor.init(procCtx);
+
+        final Record<String, String> record1 = new Record<>("key1", "value1", 10000L);
+        final Record<String, String> record2 = new Record<>("key2", "value2", 13000L);
+        final Record<String, String> record3 = new Record<>("key3", "value3", 15000L);
+        final Record<String, String> record4 = new Record<>("key4", "value4", 17000L);
+
+        procCtx.setSystemTimeMs(1000L);
+        joinProcessor.process(record1);
+
+        procCtx.setSystemTimeMs(2100L);
+        joinProcessor.process(record2);
+
+        procCtx.setSystemTimeMs(2500L);
+        joinProcessor.process(record3);
+        // being throttled, so the older value still exists
+        assertEquals(2, iteratorToList(outerStore.all()).size());
+
+        procCtx.setSystemTimeMs(4000L);
+        joinProcessor.process(record4);
+        assertEquals(1, iteratorToList(outerStore.all()).size());
+    }
+
+    private <T> List<T> iteratorToList(final Iterator<T> iterator) {
+        return StreamSupport.stream(
+                        Spliterators.spliteratorUnknownSize(iterator, Spliterator.ORDERED), false)
+                .collect(Collectors.toList());
     }
 
     private void runJoin(final StreamJoined<String, Integer, Integer> streamJoined,
@@ -279,23 +566,24 @@ public class KStreamKStreamJoinTest {
 
         final KStream<String, Integer> left = builder.stream("left", Consumed.with(Serdes.String(), Serdes.Integer()));
         final KStream<String, Integer> right = builder.stream("right", Consumed.with(Serdes.String(), Serdes.Integer()));
-        final MockProcessorSupplier<String, Integer> supplier = new MockProcessorSupplier<>();
+        final MockApiProcessorSupplier<String, Integer, Void, Void> supplier = new MockApiProcessorSupplier<>();
         final KStream<String, Integer> joinedStream;
 
         joinedStream = left.join(
             right,
             Integer::sum,
             joinWindows,
-            streamJoined);
+            streamJoined
+        );
 
         joinedStream.process(supplier);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<String, Integer> inputTopicLeft =
                     driver.createInputTopic("left", new StringSerializer(), new IntegerSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
             final TestInputTopic<String, Integer> inputTopicRight =
                     driver.createInputTopic("right", new StringSerializer(), new IntegerSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
-            final MockProcessor<String, Integer> processor = supplier.theCapturedProcessor();
+            final MockApiProcessor<String, Integer, Void, Void> processor = supplier.theCapturedProcessor();
 
             inputTopicLeft.pipeInput("A", 1, 1L);
             inputTopicLeft.pipeInput("B", 1, 2L);
@@ -303,13 +591,17 @@ public class KStreamKStreamJoinTest {
             inputTopicRight.pipeInput("A", 1, 1L);
             inputTopicRight.pipeInput("B", 2, 2L);
 
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>("A", 2, 1L),
-                new KeyValueTimestamp<>("B", 3, 2L));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>("A", 2, 1L),
+                new KeyValueTimestamp<>("B", 3, 2L)
+            );
         }
     }
 
-    @Test
-    public void testJoin() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void testJoin(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final int[] expectedKeys = new int[] {0, 1, 2, 3};
@@ -317,28 +609,29 @@ public class KStreamKStreamJoinTest {
         final KStream<Integer, String> stream1;
         final KStream<Integer, String> stream2;
         final KStream<Integer, String> joined;
-        final MockProcessorSupplier<Integer, String> supplier = new MockProcessorSupplier<>();
+        final MockApiProcessorSupplier<Integer, String, Void, Void> supplier = new MockApiProcessorSupplier<>();
         stream1 = builder.stream(topic1, consumed);
         stream2 = builder.stream(topic2, consumed);
         joined = stream1.join(
             stream2,
             MockValueJoiner.TOSTRING_JOINER,
-            JoinWindows.of(ofMillis(100)),
-            StreamJoined.with(Serdes.Integer(), Serdes.String(), Serdes.String()));
+            JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(100L)),
+            StreamJoined.with(Serdes.Integer(), Serdes.String(), Serdes.String())
+        );
         joined.process(supplier);
 
         final Collection<Set<String>> copartitionGroups =
             TopologyWrapper.getInternalTopologyBuilder(builder.build()).copartitionGroups();
 
         assertEquals(1, copartitionGroups.size());
-        assertEquals(new HashSet<>(Arrays.asList(topic1, topic2)), copartitionGroups.iterator().next());
+        assertEquals(Set.of(topic1, topic2), copartitionGroups.iterator().next());
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<Integer, String> inputTopic1 =
                     driver.createInputTopic(topic1, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
             final TestInputTopic<Integer, String> inputTopic2 =
                     driver.createInputTopic(topic2, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
-            final MockProcessor<Integer, String> processor = supplier.theCapturedProcessor();
+            final MockApiProcessor<Integer, String, Void, Void> processor = supplier.theCapturedProcessor();
 
             // push two items to the primary stream; the other window is empty
             // w1 = {}
@@ -348,7 +641,7 @@ public class KStreamKStreamJoinTest {
             for (int i = 0; i < 2; i++) {
                 inputTopic1.pipeInput(expectedKeys[i], "A" + expectedKeys[i]);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
 
             // push two items to the other stream; this should produce two items
             // w1 = { 0:A0, 1:A1 }
@@ -358,8 +651,10 @@ public class KStreamKStreamJoinTest {
             for (int i = 0; i < 2; i++) {
                 inputTopic2.pipeInput(expectedKeys[i], "a" + expectedKeys[i]);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+a0", 0),
-                new KeyValueTimestamp<>(1, "A1+a1", 0));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+a0", 0L),
+                new KeyValueTimestamp<>(1, "A1+a1", 0L)
+            );
 
             // push all four items to the primary stream; this should produce two items
             // w1 = { 0:A0, 1:A1 }
@@ -369,8 +664,10 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "B" + expectedKey);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "B0+a0", 0),
-                new KeyValueTimestamp<>(1, "B1+a1", 0));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "B0+a0", 0L),
+                new KeyValueTimestamp<>(1, "B1+a1", 0L)
+            );
 
             // push all items to the other stream; this should produce six items
             // w1 = { 0:A0, 1:A1, 0:B0, 1:B1, 2:B2, 3:B3 }
@@ -380,12 +677,14 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "b" + expectedKey);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+b0", 0),
-                new KeyValueTimestamp<>(0, "B0+b0", 0),
-                new KeyValueTimestamp<>(1, "A1+b1", 0),
-                new KeyValueTimestamp<>(1, "B1+b1", 0),
-                new KeyValueTimestamp<>(2, "B2+b2", 0),
-                new KeyValueTimestamp<>(3, "B3+b3", 0));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+b0", 0L),
+                new KeyValueTimestamp<>(0, "B0+b0", 0L),
+                new KeyValueTimestamp<>(1, "A1+b1", 0L),
+                new KeyValueTimestamp<>(1, "B1+b1", 0L),
+                new KeyValueTimestamp<>(2, "B2+b2", 0L),
+                new KeyValueTimestamp<>(3, "B3+b3", 0L)
+            );
 
             // push all four items to the primary stream; this should produce six items
             // w1 = { 0:A0, 1:A1, 0:B0, 1:B1, 2:B2, 3:B3 }
@@ -395,12 +694,14 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "C" + expectedKey);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "C0+a0", 0),
-                new KeyValueTimestamp<>(0, "C0+b0", 0),
-                new KeyValueTimestamp<>(1, "C1+a1", 0),
-                new KeyValueTimestamp<>(1, "C1+b1", 0),
-                new KeyValueTimestamp<>(2, "C2+b2", 0),
-                new KeyValueTimestamp<>(3, "C3+b3", 0));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "C0+a0", 0L),
+                new KeyValueTimestamp<>(0, "C0+b0", 0L),
+                new KeyValueTimestamp<>(1, "C1+a1", 0L),
+                new KeyValueTimestamp<>(1, "C1+b1", 0L),
+                new KeyValueTimestamp<>(2, "C2+b2", 0L),
+                new KeyValueTimestamp<>(3, "C3+b3", 0L)
+            );
 
             // push two items to the other stream; this should produce six items
             // w1 = { 0:A0, 1:A1, 0:B0, 1:B1, 2:B2, 3:B3, 0:C0, 1:C1, 2:C2, 3:C3 }
@@ -410,17 +711,21 @@ public class KStreamKStreamJoinTest {
             for (int i = 0; i < 2; i++) {
                 inputTopic2.pipeInput(expectedKeys[i], "c" + expectedKeys[i]);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+c0", 0),
-                new KeyValueTimestamp<>(0, "B0+c0", 0),
-                new KeyValueTimestamp<>(0, "C0+c0", 0),
-                new KeyValueTimestamp<>(1, "A1+c1", 0),
-                new KeyValueTimestamp<>(1, "B1+c1", 0),
-                new KeyValueTimestamp<>(1, "C1+c1", 0));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+c0", 0L),
+                new KeyValueTimestamp<>(0, "B0+c0", 0L),
+                new KeyValueTimestamp<>(0, "C0+c0", 0L),
+                new KeyValueTimestamp<>(1, "A1+c1", 0L),
+                new KeyValueTimestamp<>(1, "B1+c1", 0L),
+                new KeyValueTimestamp<>(1, "C1+c1", 0L)
+            );
         }
     }
 
-    @Test
-    public void testOuterJoin() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void testOuterJoin(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final int[] expectedKeys = new int[] {0, 1, 2, 3};
@@ -428,30 +733,31 @@ public class KStreamKStreamJoinTest {
         final KStream<Integer, String> stream1;
         final KStream<Integer, String> stream2;
         final KStream<Integer, String> joined;
-        final MockProcessorSupplier<Integer, String> supplier = new MockProcessorSupplier<>();
+        final MockApiProcessorSupplier<Integer, String, Void, Void> supplier = new MockApiProcessorSupplier<>();
 
         stream1 = builder.stream(topic1, consumed);
         stream2 = builder.stream(topic2, consumed);
         joined = stream1.outerJoin(
             stream2,
             MockValueJoiner.TOSTRING_JOINER,
-            JoinWindows.of(ofMillis(100)),
-            StreamJoined.with(Serdes.Integer(), Serdes.String(), Serdes.String()));
+            JoinWindows.ofTimeDifferenceAndGrace(ofMillis(100L), ofHours(24L)),
+            StreamJoined.with(Serdes.Integer(), Serdes.String(), Serdes.String())
+        );
         joined.process(supplier);
         final Collection<Set<String>> copartitionGroups =
             TopologyWrapper.getInternalTopologyBuilder(builder.build()).copartitionGroups();
 
         assertEquals(1, copartitionGroups.size());
-        assertEquals(new HashSet<>(Arrays.asList(topic1, topic2)), copartitionGroups.iterator().next());
+        assertEquals(Set.of(topic1, topic2), copartitionGroups.iterator().next());
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<Integer, String> inputTopic1 =
                     driver.createInputTopic(topic1, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
             final TestInputTopic<Integer, String> inputTopic2 =
                     driver.createInputTopic(topic2, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
-            final MockProcessor<Integer, String> processor = supplier.theCapturedProcessor();
+            final MockApiProcessor<Integer, String, Void, Void> processor = supplier.theCapturedProcessor();
 
-            // push two items to the primary stream; the other window is empty; this should produce two items
+            // push two items to the primary stream; the other window is empty; this should not produce items yet
             // w1 = {}
             // w2 = {}
             // --> w1 = { 0:A0, 1:A1 }
@@ -459,8 +765,7 @@ public class KStreamKStreamJoinTest {
             for (int i = 0; i < 2; i++) {
                 inputTopic1.pipeInput(expectedKeys[i], "A" + expectedKeys[i]);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+null", 0),
-                new KeyValueTimestamp<>(1, "A1+null", 0));
+            processor.checkAndClearProcessResult();
 
             // push two items to the other stream; this should produce two items
             // w1 = { 0:A0, 1:A1 }
@@ -470,10 +775,12 @@ public class KStreamKStreamJoinTest {
             for (int i = 0; i < 2; i++) {
                 inputTopic2.pipeInput(expectedKeys[i], "a" + expectedKeys[i]);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+a0", 0),
-                new KeyValueTimestamp<>(1, "A1+a1", 0));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+a0", 0L),
+                new KeyValueTimestamp<>(1, "A1+a1", 0L)
+            );
 
-            // push all four items to the primary stream; this should produce four items
+            // push all four items to the primary stream; this should produce two items
             // w1 = { 0:A0, 1:A1 }
             // w2 = { 0:a0, 1:a1 }
             // --> w1 = { 0:A0, 1:A1, 0:B0, 1:B1, 2:B2, 3:B3 }
@@ -481,10 +788,10 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "B" + expectedKey);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "B0+a0", 0),
-                new KeyValueTimestamp<>(1, "B1+a1", 0),
-                new KeyValueTimestamp<>(2, "B2+null", 0),
-                new KeyValueTimestamp<>(3, "B3+null", 0));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "B0+a0", 0L),
+                new KeyValueTimestamp<>(1, "B1+a1", 0L)
+            );
 
             // push all items to the other stream; this should produce six items
             // w1 = { 0:A0, 1:A1, 0:B0, 1:B1, 2:B2, 3:B3 }
@@ -494,12 +801,14 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "b" + expectedKey);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+b0", 0),
-                new KeyValueTimestamp<>(0, "B0+b0", 0),
-                new KeyValueTimestamp<>(1, "A1+b1", 0),
-                new KeyValueTimestamp<>(1, "B1+b1", 0),
-                new KeyValueTimestamp<>(2, "B2+b2", 0),
-                new KeyValueTimestamp<>(3, "B3+b3", 0));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+b0", 0L),
+                new KeyValueTimestamp<>(0, "B0+b0", 0L),
+                new KeyValueTimestamp<>(1, "A1+b1", 0L),
+                new KeyValueTimestamp<>(1, "B1+b1", 0L),
+                new KeyValueTimestamp<>(2, "B2+b2", 0L),
+                new KeyValueTimestamp<>(3, "B3+b3", 0L)
+            );
 
             // push all four items to the primary stream; this should produce six items
             // w1 = { 0:A0, 1:A1, 0:B0, 1:B1, 2:B2, 3:B3 }
@@ -509,12 +818,14 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "C" + expectedKey);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "C0+a0", 0),
-                new KeyValueTimestamp<>(0, "C0+b0", 0),
-                new KeyValueTimestamp<>(1, "C1+a1", 0),
-                new KeyValueTimestamp<>(1, "C1+b1", 0),
-                new KeyValueTimestamp<>(2, "C2+b2", 0),
-                new KeyValueTimestamp<>(3, "C3+b3", 0));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "C0+a0", 0L),
+                new KeyValueTimestamp<>(0, "C0+b0", 0L),
+                new KeyValueTimestamp<>(1, "C1+a1", 0L),
+                new KeyValueTimestamp<>(1, "C1+b1", 0L),
+                new KeyValueTimestamp<>(2, "C2+b2", 0L),
+                new KeyValueTimestamp<>(3, "C3+b3", 0L)
+            );
 
             // push two items to the other stream; this should produce six items
             // w1 = { 0:A0, 1:A1, 0:B0, 1:B1, 2:B2, 3:B3, 0:C0, 1:C1, 2:C2, 3:C3 }
@@ -524,17 +835,21 @@ public class KStreamKStreamJoinTest {
             for (int i = 0; i < 2; i++) {
                 inputTopic2.pipeInput(expectedKeys[i], "c" + expectedKeys[i]);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+c0", 0),
-                new KeyValueTimestamp<>(0, "B0+c0", 0),
-                new KeyValueTimestamp<>(0, "C0+c0", 0),
-                new KeyValueTimestamp<>(1, "A1+c1", 0),
-                new KeyValueTimestamp<>(1, "B1+c1", 0),
-                new KeyValueTimestamp<>(1, "C1+c1", 0));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+c0", 0L),
+                new KeyValueTimestamp<>(0, "B0+c0", 0L),
+                new KeyValueTimestamp<>(0, "C0+c0", 0L),
+                new KeyValueTimestamp<>(1, "A1+c1", 0L),
+                new KeyValueTimestamp<>(1, "B1+c1", 0L),
+                new KeyValueTimestamp<>(1, "C1+c1", 0L)
+            );
         }
     }
 
-    @Test
-    public void testWindowing() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void testWindowing(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final int[] expectedKeys = new int[] {0, 1, 2, 3};
@@ -542,29 +857,30 @@ public class KStreamKStreamJoinTest {
         final KStream<Integer, String> stream1;
         final KStream<Integer, String> stream2;
         final KStream<Integer, String> joined;
-        final MockProcessorSupplier<Integer, String> supplier = new MockProcessorSupplier<>();
+        final MockApiProcessorSupplier<Integer, String, Void, Void> supplier = new MockApiProcessorSupplier<>();
         stream1 = builder.stream(topic1, consumed);
         stream2 = builder.stream(topic2, consumed);
 
         joined = stream1.join(
             stream2,
             MockValueJoiner.TOSTRING_JOINER,
-            JoinWindows.of(ofMillis(100)),
-            StreamJoined.with(Serdes.Integer(), Serdes.String(), Serdes.String()));
+            JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(100L)),
+            StreamJoined.with(Serdes.Integer(), Serdes.String(), Serdes.String())
+        );
         joined.process(supplier);
 
         final Collection<Set<String>> copartitionGroups =
             TopologyWrapper.getInternalTopologyBuilder(builder.build()).copartitionGroups();
 
         assertEquals(1, copartitionGroups.size());
-        assertEquals(new HashSet<>(Arrays.asList(topic1, topic2)), copartitionGroups.iterator().next());
+        assertEquals(Set.of(topic1, topic2), copartitionGroups.iterator().next());
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<Integer, String> inputTopic1 =
                     driver.createInputTopic(topic1, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
             final TestInputTopic<Integer, String> inputTopic2 =
                     driver.createInputTopic(topic2, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
-            final MockProcessor<Integer, String> processor = supplier.theCapturedProcessor();
+            final MockApiProcessor<Integer, String, Void, Void> processor = supplier.theCapturedProcessor();
             long time = 0L;
 
             // push two items to the primary stream; the other window is empty; this should produce no items
@@ -575,7 +891,7 @@ public class KStreamKStreamJoinTest {
             for (int i = 0; i < 2; i++) {
                 inputTopic1.pipeInput(expectedKeys[i], "A" + expectedKeys[i], time);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
 
             // push two items to the other stream; this should produce two items
             // w1 = { 0:A0 (ts: 0), 1:A1 (ts: 0) }
@@ -585,8 +901,10 @@ public class KStreamKStreamJoinTest {
             for (int i = 0; i < 2; i++) {
                 inputTopic2.pipeInput(expectedKeys[i], "a" + expectedKeys[i], time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+a0", 0),
-                new KeyValueTimestamp<>(1, "A1+a1", 0));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+a0", 0L),
+                new KeyValueTimestamp<>(1, "A1+a1", 0L)
+            );
 
             // push four items to the primary stream with larger and increasing timestamp; this should produce no items
             // w1 = { 0:A0 (ts: 0), 1:A1 (ts: 0) }
@@ -598,7 +916,7 @@ public class KStreamKStreamJoinTest {
             for (int i = 0; i < expectedKeys.length; i++) {
                 inputTopic1.pipeInput(expectedKeys[i], "B" + expectedKeys[i], time + i);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
 
             // push four items to the other stream with fixed larger timestamp; this should produce four items
             // w1 = { 0:A0 (ts: 0), 1:A1 (ts: 0),
@@ -612,10 +930,12 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "b" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "B0+b0", 1100),
-                new KeyValueTimestamp<>(1, "B1+b1", 1100),
-                new KeyValueTimestamp<>(2, "B2+b2", 1100),
-                new KeyValueTimestamp<>(3, "B3+b3", 1100));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "B0+b0", 1100L),
+                new KeyValueTimestamp<>(1, "B1+b1", 1100L),
+                new KeyValueTimestamp<>(2, "B2+b2", 1100L),
+                new KeyValueTimestamp<>(3, "B3+b3", 1100L)
+            );
 
             // push four items to the other stream with incremented timestamp; this should produce three items
             // w1 = { 0:A0 (ts: 0), 1:A1 (ts: 0),
@@ -631,9 +951,11 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "c" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(1, "B1+c1", 1101),
-                new KeyValueTimestamp<>(2, "B2+c2", 1101),
-                new KeyValueTimestamp<>(3, "B3+c3", 1101));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(1, "B1+c1", 1101L),
+                new KeyValueTimestamp<>(2, "B2+c2", 1101L),
+                new KeyValueTimestamp<>(3, "B3+c3", 1101L)
+            );
 
             // push four items to the other stream with incremented timestamp; this should produce two items
             // w1 = { 0:A0 (ts: 0), 1:A1 (ts: 0),
@@ -651,8 +973,10 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "d" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(2, "B2+d2", 1102),
-                new KeyValueTimestamp<>(3, "B3+d3", 1102));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(2, "B2+d2", 1102L),
+                new KeyValueTimestamp<>(3, "B3+d3", 1102L)
+            );
 
             // push four items to the other stream with incremented timestamp; this should produce one item
             // w1 = { 0:A0 (ts: 0), 1:A1 (ts: 0),
@@ -672,7 +996,9 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "e" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(3, "B3+e3", 1103));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(3, "B3+e3", 1103L)
+            );
 
             // push four items to the other stream with incremented timestamp; this should produce no items
             // w1 = { 0:A0 (ts: 0), 1:A1 (ts: 0),
@@ -694,7 +1020,7 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "f" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
 
             // push four items to the other stream with timestamp before the window bound; this should produce no items
             // w1 = { 0:A0 (ts: 0), 1:A1 (ts: 0),
@@ -718,7 +1044,7 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "g" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
 
             // push four items to the other stream with with incremented timestamp; this should produce one item
             // w1 = { 0:A0 (ts: 0), 1:A1 (ts: 0),
@@ -744,7 +1070,9 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "h" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "B0+h0", 1000));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "B0+h0", 1000L)
+            );
 
             // push four items to the other stream with with incremented timestamp; this should produce two items
             // w1 = { 0:A0 (ts: 0), 1:A1 (ts: 0),
@@ -772,8 +1100,10 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "i" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "B0+i0", 1000),
-                new KeyValueTimestamp<>(1, "B1+i1", 1001));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "B0+i0", 1000L),
+                new KeyValueTimestamp<>(1, "B1+i1", 1001L)
+            );
 
             // push four items to the other stream with with incremented timestamp; this should produce three items
             // w1 = { 0:A0 (ts: 0), 1:A1 (ts: 0),
@@ -803,9 +1133,11 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "j" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "B0+j0", 1000),
-                new KeyValueTimestamp<>(1, "B1+j1", 1001),
-                new KeyValueTimestamp<>(2, "B2+j2", 1002));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "B0+j0", 1000L),
+                new KeyValueTimestamp<>(1, "B1+j1", 1001L),
+                new KeyValueTimestamp<>(2, "B2+j2", 1002L)
+            );
 
             // push four items to the other stream with with incremented timestamp; this should produce four items
             // w1 = { 0:A0 (ts: 0), 1:A1 (ts: 0),
@@ -837,10 +1169,12 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "k" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "B0+k0", 1000),
-                new KeyValueTimestamp<>(1, "B1+k1", 1001),
-                new KeyValueTimestamp<>(2, "B2+k2", 1002),
-                new KeyValueTimestamp<>(3, "B3+k3", 1003));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "B0+k0", 1000L),
+                new KeyValueTimestamp<>(1, "B1+k1", 1001L),
+                new KeyValueTimestamp<>(2, "B2+k2", 1002L),
+                new KeyValueTimestamp<>(3, "B3+k3", 1003L)
+            );
 
             // advance time to not join with existing data
             // we omit above exiting data, even if it's still in the window
@@ -854,7 +1188,7 @@ public class KStreamKStreamJoinTest {
             for (int i = 0; i < expectedKeys.length; i++) {
                 inputTopic2.pipeInput(expectedKeys[i], "l" + expectedKeys[i], time + i);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
 
             // push four items with larger timestamps to the primary stream; this should produce four items
             // w1 = {}
@@ -865,10 +1199,12 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "C" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "C0+l0", 2100),
-                new KeyValueTimestamp<>(1, "C1+l1", 2100),
-                new KeyValueTimestamp<>(2, "C2+l2", 2100),
-                new KeyValueTimestamp<>(3, "C3+l3", 2100));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "C0+l0", 2100L),
+                new KeyValueTimestamp<>(1, "C1+l1", 2100L),
+                new KeyValueTimestamp<>(2, "C2+l2", 2100L),
+                new KeyValueTimestamp<>(3, "C3+l3", 2100L)
+            );
 
             // push four items with increase timestamps to the primary stream; this should produce three items
             // w1 = { 0:C0 (ts: 2100), 1:C1 (ts: 2100), 2:C2 (ts: 2100), 3:C3 (ts: 2100) }
@@ -880,9 +1216,11 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "D" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(1, "D1+l1", 2101),
-                new KeyValueTimestamp<>(2, "D2+l2", 2101),
-                new KeyValueTimestamp<>(3, "D3+l3", 2101));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(1, "D1+l1", 2101L),
+                new KeyValueTimestamp<>(2, "D2+l2", 2101L),
+                new KeyValueTimestamp<>(3, "D3+l3", 2101L)
+            );
 
             // push four items with increase timestamps to the primary stream; this should produce two items
             // w1 = { 0:C0 (ts: 2100), 1:C1 (ts: 2100), 2:C2 (ts: 2100), 3:C3 (ts: 2100),
@@ -896,8 +1234,10 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "E" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(2, "E2+l2", 2102),
-                new KeyValueTimestamp<>(3, "E3+l3", 2102));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(2, "E2+l2", 2102L),
+                new KeyValueTimestamp<>(3, "E3+l3", 2102L)
+            );
 
             // push four items with increase timestamps to the primary stream; this should produce one item
             // w1 = { 0:C0 (ts: 2100), 1:C1 (ts: 2100), 2:C2 (ts: 2100), 3:C3 (ts: 2100),
@@ -913,7 +1253,9 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "F" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(3, "F3+l3", 2103));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(3, "F3+l3", 2103L)
+            );
 
             // push four items with increase timestamps (now out of window) to the primary stream; this should produce no items
             // w1 = { 0:C0 (ts: 2100), 1:C1 (ts: 2100), 2:C2 (ts: 2100), 3:C3 (ts: 2100),
@@ -931,7 +1273,7 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "G" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
 
             // push four items with smaller timestamps (before window) to the primary stream; this should produce no items
             // w1 = { 0:C0 (ts: 2100), 1:C1 (ts: 2100), 2:C2 (ts: 2100), 3:C3 (ts: 2100),
@@ -951,7 +1293,7 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "H" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
 
             // push four items with increased timestamps to the primary stream; this should produce one item
             // w1 = { 0:C0 (ts: 2100), 1:C1 (ts: 2100), 2:C2 (ts: 2100), 3:C3 (ts: 2100),
@@ -973,7 +1315,9 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "I" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "I0+l0", 2000));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "I0+l0", 2000L)
+            );
 
             // push four items with increased timestamps to the primary stream; this should produce two items
             // w1 = { 0:C0 (ts: 2100), 1:C1 (ts: 2100), 2:C2 (ts: 2100), 3:C3 (ts: 2100),
@@ -997,8 +1341,10 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "J" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "J0+l0", 2000),
-                new KeyValueTimestamp<>(1, "J1+l1", 2001));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "J0+l0", 2000L),
+                new KeyValueTimestamp<>(1, "J1+l1", 2001L)
+            );
 
             // push four items with increased timestamps to the primary stream; this should produce three items
             // w1 = { 0:C0 (ts: 2100), 1:C1 (ts: 2100), 2:C2 (ts: 2100), 3:C3 (ts: 2100),
@@ -1024,9 +1370,11 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "K" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "K0+l0", 2000),
-                new KeyValueTimestamp<>(1, "K1+l1", 2001),
-                new KeyValueTimestamp<>(2, "K2+l2", 2002));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "K0+l0", 2000L),
+                new KeyValueTimestamp<>(1, "K1+l1", 2001L),
+                new KeyValueTimestamp<>(2, "K2+l2", 2002L)
+            );
 
             // push four items with increased timestamps to the primary stream; this should produce four items
             // w1 = { 0:C0 (ts: 2100), 1:C1 (ts: 2100), 2:C2 (ts: 2100), 3:C3 (ts: 2100),
@@ -1054,15 +1402,19 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic1.pipeInput(expectedKey, "L" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "L0+l0", 2000),
-                new KeyValueTimestamp<>(1, "L1+l1", 2001),
-                new KeyValueTimestamp<>(2, "L2+l2", 2002),
-                new KeyValueTimestamp<>(3, "L3+l3", 2003));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "L0+l0", 2000L),
+                new KeyValueTimestamp<>(1, "L1+l1", 2001L),
+                new KeyValueTimestamp<>(2, "L2+l2", 2002L),
+                new KeyValueTimestamp<>(3, "L3+l3", 2003L)
+            );
         }
     }
 
-    @Test
-    public void testAsymmetricWindowingAfter() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void testAsymmetricWindowingAfter(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final int[] expectedKeys = new int[] {0, 1, 2, 3};
@@ -1070,31 +1422,32 @@ public class KStreamKStreamJoinTest {
         final KStream<Integer, String> stream1;
         final KStream<Integer, String> stream2;
         final KStream<Integer, String> joined;
-        final MockProcessorSupplier<Integer, String> supplier = new MockProcessorSupplier<>();
+        final MockApiProcessorSupplier<Integer, String, Void, Void> supplier = new MockApiProcessorSupplier<>();
         stream1 = builder.stream(topic1, consumed);
         stream2 = builder.stream(topic2, consumed);
 
         joined = stream1.join(
             stream2,
             MockValueJoiner.TOSTRING_JOINER,
-            JoinWindows.of(ofMillis(0)).after(ofMillis(100)),
+            JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(0)).after(ofMillis(100)),
             StreamJoined.with(Serdes.Integer(),
                 Serdes.String(),
-                Serdes.String()));
+                Serdes.String())
+        );
         joined.process(supplier);
 
         final Collection<Set<String>> copartitionGroups =
             TopologyWrapper.getInternalTopologyBuilder(builder.build()).copartitionGroups();
 
         assertEquals(1, copartitionGroups.size());
-        assertEquals(new HashSet<>(Arrays.asList(topic1, topic2)), copartitionGroups.iterator().next());
+        assertEquals(Set.of(topic1, topic2), copartitionGroups.iterator().next());
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<Integer, String> inputTopic1 =
                     driver.createInputTopic(topic1, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
             final TestInputTopic<Integer, String> inputTopic2 =
                     driver.createInputTopic(topic2, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
-            final MockProcessor<Integer, String> processor = supplier.theCapturedProcessor();
+            final MockApiProcessor<Integer, String, Void, Void> processor = supplier.theCapturedProcessor();
             long time = 1000L;
 
             // push four items with increasing timestamps to the primary stream; the other window is empty; this should produce no items
@@ -1105,7 +1458,7 @@ public class KStreamKStreamJoinTest {
             for (int i = 0; i < expectedKeys.length; i++) {
                 inputTopic1.pipeInput(expectedKeys[i], "A" + expectedKeys[i], time + i);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
 
             // push four items smaller timestamps (out of window) to the secondary stream; this should produce no items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1116,7 +1469,7 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "a" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
 
             // push four items with increased timestamps to the secondary stream; this should produce one item
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1128,7 +1481,9 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "b" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+b0", 1000));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+b0", 1000L)
+            );
 
             // push four items with increased timestamps to the secondary stream; this should produce two items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1142,8 +1497,10 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "c" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+c0", 1001),
-                new KeyValueTimestamp<>(1, "A1+c1", 1001));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+c0", 1001L),
+                new KeyValueTimestamp<>(1, "A1+c1", 1001L)
+            );
 
             // push four items with increased timestamps to the secondary stream; this should produce three items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1159,9 +1516,11 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "d" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+d0", 1002),
-                new KeyValueTimestamp<>(1, "A1+d1", 1002),
-                new KeyValueTimestamp<>(2, "A2+d2", 1002));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+d0", 1002L),
+                new KeyValueTimestamp<>(1, "A1+d1", 1002L),
+                new KeyValueTimestamp<>(2, "A2+d2", 1002L)
+            );
 
             // push four items with increased timestamps to the secondary stream; this should produce four items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1179,10 +1538,12 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "e" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+e0", 1003),
-                new KeyValueTimestamp<>(1, "A1+e1", 1003),
-                new KeyValueTimestamp<>(2, "A2+e2", 1003),
-                new KeyValueTimestamp<>(3, "A3+e3", 1003));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+e0", 1003L),
+                new KeyValueTimestamp<>(1, "A1+e1", 1003L),
+                new KeyValueTimestamp<>(2, "A2+e2", 1003L),
+                new KeyValueTimestamp<>(3, "A3+e3", 1003L)
+            );
 
             // push four items with larger timestamps to the secondary stream; this should produce four items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1202,10 +1563,12 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "f" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+f0", 1100),
-                new KeyValueTimestamp<>(1, "A1+f1", 1100),
-                new KeyValueTimestamp<>(2, "A2+f2", 1100),
-                new KeyValueTimestamp<>(3, "A3+f3", 1100));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+f0", 1100L),
+                new KeyValueTimestamp<>(1, "A1+f1", 1100L),
+                new KeyValueTimestamp<>(2, "A2+f2", 1100L),
+                new KeyValueTimestamp<>(3, "A3+f3", 1100L)
+            );
 
             // push four items with increased timestamps to the secondary stream; this should produce three items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1227,9 +1590,11 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "g" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(1, "A1+g1", 1101),
-                new KeyValueTimestamp<>(2, "A2+g2", 1101),
-                new KeyValueTimestamp<>(3, "A3+g3", 1101));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(1, "A1+g1", 1101L),
+                new KeyValueTimestamp<>(2, "A2+g2", 1101L),
+                new KeyValueTimestamp<>(3, "A3+g3", 1101L)
+            );
 
             // push four items with increased timestamps to the secondary stream; this should produce two items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1253,8 +1618,10 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "h" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(2, "A2+h2", 1102),
-                new KeyValueTimestamp<>(3, "A3+h3", 1102));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(2, "A2+h2", 1102L),
+                new KeyValueTimestamp<>(3, "A3+h3", 1102L)
+            );
 
             // push four items with increased timestamps to the secondary stream; this should produce one item
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1280,7 +1647,9 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "i" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(3, "A3+i3", 1103));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(3, "A3+i3", 1103L)
+            );
 
             // push four items with increased timestamps (no out of window) to the secondary stream; this should produce no items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1308,12 +1677,14 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "j" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
         }
     }
 
-    @Test
-    public void testAsymmetricWindowingBefore() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void testAsymmetricWindowingBefore(final boolean withHeaders) {
+        setDslStoreFormat(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
 
         final int[] expectedKeys = new int[] {0, 1, 2, 3};
@@ -1321,7 +1692,7 @@ public class KStreamKStreamJoinTest {
         final KStream<Integer, String> stream1;
         final KStream<Integer, String> stream2;
         final KStream<Integer, String> joined;
-        final MockProcessorSupplier<Integer, String> supplier = new MockProcessorSupplier<>();
+        final MockApiProcessorSupplier<Integer, String, Void, Void> supplier = new MockApiProcessorSupplier<>();
 
         stream1 = builder.stream(topic1, consumed);
         stream2 = builder.stream(topic2, consumed);
@@ -1329,22 +1700,23 @@ public class KStreamKStreamJoinTest {
         joined = stream1.join(
             stream2,
             MockValueJoiner.TOSTRING_JOINER,
-            JoinWindows.of(ofMillis(0)).before(ofMillis(100)),
-            StreamJoined.with(Serdes.Integer(), Serdes.String(), Serdes.String()));
+            JoinWindows.ofTimeDifferenceWithNoGrace(ofMillis(0)).before(ofMillis(100)),
+            StreamJoined.with(Serdes.Integer(), Serdes.String(), Serdes.String())
+        );
         joined.process(supplier);
 
         final Collection<Set<String>> copartitionGroups =
             TopologyWrapper.getInternalTopologyBuilder(builder.build()).copartitionGroups();
 
         assertEquals(1, copartitionGroups.size());
-        assertEquals(new HashSet<>(Arrays.asList(topic1, topic2)), copartitionGroups.iterator().next());
+        assertEquals(Set.of(topic1, topic2), copartitionGroups.iterator().next());
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<Integer, String> inputTopic1 =
                     driver.createInputTopic(topic1, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
             final TestInputTopic<Integer, String> inputTopic2 =
                     driver.createInputTopic(topic2, new IntegerSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
-            final MockProcessor<Integer, String> processor = supplier.theCapturedProcessor();
+            final MockApiProcessor<Integer, String, Void, Void> processor = supplier.theCapturedProcessor();
             long time = 1000L;
 
             // push four items with increasing timestamps to the primary stream; the other window is empty; this should produce no items
@@ -1355,7 +1727,7 @@ public class KStreamKStreamJoinTest {
             for (int i = 0; i < expectedKeys.length; i++) {
                 inputTopic1.pipeInput(expectedKeys[i], "A" + expectedKeys[i], time + i);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
 
             // push four items with smaller timestamps (before the window) to the other stream; this should produce no items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1366,7 +1738,7 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "a" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
 
             // push four items with increased timestamp to the other stream; this should produce one item
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1378,7 +1750,9 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "b" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+b0", 1000));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+b0", 1000L)
+            );
 
             // push four items with increased timestamp to the other stream; this should produce two items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1392,8 +1766,10 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "c" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+c0", 1000),
-                new KeyValueTimestamp<>(1, "A1+c1", 1001));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+c0", 1000L),
+                new KeyValueTimestamp<>(1, "A1+c1", 1001L)
+            );
 
             // push four items with increased timestamp to the other stream; this should produce three items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1409,9 +1785,11 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "d" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+d0", 1000),
-                new KeyValueTimestamp<>(1, "A1+d1", 1001),
-                new KeyValueTimestamp<>(2, "A2+d2", 1002));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+d0", 1000L),
+                new KeyValueTimestamp<>(1, "A1+d1", 1001L),
+                new KeyValueTimestamp<>(2, "A2+d2", 1002L)
+            );
 
             // push four items with increased timestamp to the other stream; this should produce four items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1429,10 +1807,12 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "e" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+e0", 1000),
-                new KeyValueTimestamp<>(1, "A1+e1", 1001),
-                new KeyValueTimestamp<>(2, "A2+e2", 1002),
-                new KeyValueTimestamp<>(3, "A3+e3", 1003));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+e0", 1000L),
+                new KeyValueTimestamp<>(1, "A1+e1", 1001L),
+                new KeyValueTimestamp<>(2, "A2+e2", 1002L),
+                new KeyValueTimestamp<>(3, "A3+e3", 1003L)
+            );
 
             // push four items with larger timestamp to the other stream; this should produce four items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1452,10 +1832,12 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "f" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(0, "A0+f0", 1000),
-                new KeyValueTimestamp<>(1, "A1+f1", 1001),
-                new KeyValueTimestamp<>(2, "A2+f2", 1002),
-                new KeyValueTimestamp<>(3, "A3+f3", 1003));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(0, "A0+f0", 1000L),
+                new KeyValueTimestamp<>(1, "A1+f1", 1001L),
+                new KeyValueTimestamp<>(2, "A2+f2", 1002L),
+                new KeyValueTimestamp<>(3, "A3+f3", 1003L)
+            );
 
             // push four items with increase timestamp to the other stream; this should produce three items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1477,9 +1859,11 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "g" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(1, "A1+g1", 1001),
-                new KeyValueTimestamp<>(2, "A2+g2", 1002),
-                new KeyValueTimestamp<>(3, "A3+g3", 1003));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(1, "A1+g1", 1001L),
+                new KeyValueTimestamp<>(2, "A2+g2", 1002L),
+                new KeyValueTimestamp<>(3, "A3+g3", 1003L)
+            );
 
             // push four items with increase timestamp to the other stream; this should produce two items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1503,8 +1887,10 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "h" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(2, "A2+h2", 1002),
-                new KeyValueTimestamp<>(3, "A3+h3", 1003));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(2, "A2+h2", 1002L),
+                new KeyValueTimestamp<>(3, "A3+h3", 1003L)
+            );
 
             // push four items with increase timestamp to the other stream; this should produce one item
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1530,7 +1916,9 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "i" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(new KeyValueTimestamp<>(3, "A3+i3", 1003));
+            processor.checkAndClearProcessResult(
+                new KeyValueTimestamp<>(3, "A3+i3", 1003L)
+            );
 
             // push four items with increase timestamp (no out of window) to the other stream; this should produce no items
             // w1 = { 0:A0 (ts: 1000), 1:A1 (ts: 1001), 2:A2 (ts: 1002), 3:A3 (ts: 1003) }
@@ -1558,7 +1946,7 @@ public class KStreamKStreamJoinTest {
             for (final int expectedKey : expectedKeys) {
                 inputTopic2.pipeInput(expectedKey, "j" + expectedKey, time);
             }
-            processor.checkAndClearProcessResult(EMPTY);
+            processor.checkAndClearProcessResult();
         }
     }
 
@@ -1570,11 +1958,15 @@ public class KStreamKStreamJoinTest {
         final KStream<String, Integer> left = builder.stream("left", Consumed.with(Serdes.String(), Serdes.Integer()));
         final KStream<String, Integer> right = builder.stream("right", Consumed.with(Serdes.String(), Serdes.Integer()));
 
-        final StreamsException streamsException = assertThrows(StreamsException.class, () -> left.join(
-            right,
-            (value1, value2) -> value1 + value2,
-            joinWindows,
-            streamJoined));
+        final StreamsException streamsException = assertThrows(
+            StreamsException.class,
+            () -> left.join(
+                right,
+                Integer::sum,
+                joinWindows,
+                streamJoined
+            )
+        );
 
         assertTrue(streamsException.getMessage().startsWith(expectedExceptionMessagePrefix));
     }
@@ -1653,7 +2045,7 @@ public class KStreamKStreamJoinTest {
             "      <-- second-join-this-join, second-join-other-join\n" +
             "    Sink: KSTREAM-SINK-0000000021 (topic: out-two)\n" +
             "      <-- second-join-merge\n\n";
-    
+
     private final String expectedTopologyWithGeneratedRepartitionTopic = "Topologies:\n" +
             "   Sub-topology: 0\n" +
             "    Source: KSTREAM-SOURCE-0000000000 (topics: [topic])\n" +
@@ -1708,4 +2100,19 @@ public class KStreamKStreamJoinTest {
             "      <-- KSTREAM-MERGE-0000000011\n" +
             "    Sink: KSTREAM-SINK-0000000021 (topic: out-to)\n" +
             "      <-- KSTREAM-MERGE-0000000020\n\n";
+
+    /**
+     * Configures the DSL store format to use headers if enabled.
+     * This is a helper method to reduce boilerplate in parameterized tests that test both
+     * with and without headers mode.
+     *
+     * @param withHeaders Whether to enable headers mode
+     */
+    private void setDslStoreFormat(final boolean withHeaders) {
+        if (withHeaders) {
+            props.put(StreamsConfig.DSL_STORE_FORMAT_CONFIG, StreamsConfig.DSL_STORE_FORMAT_HEADERS);
+        } else {
+            props.put(StreamsConfig.DSL_STORE_FORMAT_CONFIG, StreamsConfig.DSL_STORE_FORMAT_DEFAULT);
+        }
+    }
 }

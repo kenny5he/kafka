@@ -16,14 +16,25 @@
  */
 package org.apache.kafka.common.security.oauthbearer.internals.unsecured;
 
+import org.apache.kafka.common.KafkaException;
+import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
+import org.apache.kafka.common.security.auth.SaslExtensions;
+import org.apache.kafka.common.security.auth.SaslExtensionsCallback;
+import org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule;
+import org.apache.kafka.common.security.oauthbearer.OAuthBearerTokenCallback;
+import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerClientInitialResponse;
+import org.apache.kafka.common.utils.Time;
+import org.apache.kafka.common.utils.Utils;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Base64.Encoder;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -35,18 +46,6 @@ import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.sasl.SaslException;
-
-import org.apache.kafka.common.KafkaException;
-import org.apache.kafka.common.config.ConfigException;
-import org.apache.kafka.common.security.auth.AuthenticateCallbackHandler;
-import org.apache.kafka.common.security.auth.SaslExtensionsCallback;
-import org.apache.kafka.common.security.auth.SaslExtensions;
-import org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule;
-import org.apache.kafka.common.security.oauthbearer.OAuthBearerTokenCallback;
-import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerClientInitialResponse;
-import org.apache.kafka.common.utils.Time;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * A {@code CallbackHandler} that recognizes {@link OAuthBearerTokenCallback}
@@ -97,13 +96,12 @@ import org.slf4j.LoggerFactory;
  * broker configuration property.
  */
 public class OAuthBearerUnsecuredLoginCallbackHandler implements AuthenticateCallbackHandler {
-    private final Logger log = LoggerFactory.getLogger(OAuthBearerUnsecuredLoginCallbackHandler.class);
+    private static final Logger log = LoggerFactory.getLogger(OAuthBearerUnsecuredLoginCallbackHandler.class);
     private static final String OPTION_PREFIX = "unsecuredLogin";
     private static final String PRINCIPAL_CLAIM_NAME_OPTION = OPTION_PREFIX + "PrincipalClaimName";
     private static final String LIFETIME_SECONDS_OPTION = OPTION_PREFIX + "LifetimeSeconds";
     private static final String SCOPE_CLAIM_NAME_OPTION = OPTION_PREFIX + "ScopeClaimName";
-    private static final Set<String> RESERVED_CLAIMS = Collections
-            .unmodifiableSet(new HashSet<>(Arrays.asList("iat", "exp")));
+    private static final Set<String> RESERVED_CLAIMS = Set.of("iat", "exp");
     private static final String DEFAULT_PRINCIPAL_CLAIM_NAME = "sub";
     private static final String DEFAULT_LIFETIME_SECONDS_ONE_HOUR = "3600";
     private static final String DEFAULT_SCOPE_CLAIM_NAME = "scope";
@@ -148,7 +146,7 @@ public class OAuthBearerUnsecuredLoginCallbackHandler implements AuthenticateCal
             throw new IllegalArgumentException(
                     String.format("Must supply exactly 1 non-null JAAS mechanism configuration (size was %d)",
                             jaasConfigEntries.size()));
-        this.moduleOptions = Collections.unmodifiableMap((Map<String, String>) jaasConfigEntries.get(0).getOptions());
+        this.moduleOptions = Map.copyOf((Map<String, String>) jaasConfigEntries.get(0).getOptions());
         configured = true;
     }
 
@@ -182,22 +180,27 @@ public class OAuthBearerUnsecuredLoginCallbackHandler implements AuthenticateCal
     private void handleTokenCallback(OAuthBearerTokenCallback callback) {
         if (callback.token() != null)
             throw new IllegalArgumentException("Callback had a token already");
-        if (moduleOptions.isEmpty()) {
-            log.debug("Token not provided, this login cannot be used to establish client connections");
+        if (!hasUnsecuredLoginOptions()) {
+            if (moduleOptions.isEmpty()) {
+                log.debug("Token not provided, this login cannot be used to establish client connections");
+            } else {
+                // INFO (not DEBUG) so a mistyped unsecuredLogin* option isn't silently ignored; this is the
+                // normal path for ssl.*-only JWKS trust options (KAFKA-21143) until KAFKA-21221, not a warning.
+                log.info("Token not provided since no {}* options were found (module options: {}), this login cannot be used to establish client connections",
+                        OPTION_PREFIX, moduleOptions.keySet());
+            }
             callback.token(null);
             return;
         }
-        if (moduleOptions.keySet().stream().noneMatch(name -> !name.startsWith(EXTENSION_PREFIX))) {
+        if (moduleOptions.keySet().stream()
+                .filter(name -> name.startsWith(OPTION_PREFIX))
+                .allMatch(name -> name.startsWith(EXTENSION_PREFIX))) {
             throw new OAuthBearerConfigException("Extensions provided in login context without a token");
         }
         String principalClaimNameValue = optionValue(PRINCIPAL_CLAIM_NAME_OPTION);
-        String principalClaimName = principalClaimNameValue != null && !principalClaimNameValue.trim().isEmpty()
-                ? principalClaimNameValue.trim()
-                : DEFAULT_PRINCIPAL_CLAIM_NAME;
+        String principalClaimName = Utils.isBlank(principalClaimNameValue) ? DEFAULT_PRINCIPAL_CLAIM_NAME : principalClaimNameValue.trim();
         String scopeClaimNameValue = optionValue(SCOPE_CLAIM_NAME_OPTION);
-        String scopeClaimName = scopeClaimNameValue != null && !scopeClaimNameValue.trim().isEmpty()
-                ? scopeClaimNameValue.trim()
-                : DEFAULT_SCOPE_CLAIM_NAME;
+        String scopeClaimName = Utils.isBlank(scopeClaimNameValue) ? DEFAULT_SCOPE_CLAIM_NAME : scopeClaimNameValue.trim();
         String headerJson = "{" + claimOrHeaderJsonText("alg", "none") + "}";
         String lifetimeSecondsValueToUse = optionValue(LIFETIME_SECONDS_OPTION, DEFAULT_LIFETIME_SECONDS_ONE_HOUR);
         String claimsJson;
@@ -221,6 +224,16 @@ public class OAuthBearerUnsecuredLoginCallbackHandler implements AuthenticateCal
             // occurs if the principal claim doesn't exist or has an empty value
             throw new OAuthBearerConfigException(e.getMessage(), e);
         }
+    }
+
+    /**
+     * Returns true if any module option is relevant to unsecured token creation.
+     * Options that do not start with the {@code unsecuredLogin} prefix (e.g.
+     * {@code ssl.*} options used for JWKS endpoint TLS trust) are not related to
+     * unsecured token minting and should not trigger token creation.
+     */
+    private boolean hasUnsecuredLoginOptions() {
+        return moduleOptions.keySet().stream().anyMatch(name -> name.startsWith(OPTION_PREFIX));
     }
 
     /**
@@ -274,7 +287,7 @@ public class OAuthBearerUnsecuredLoginCallbackHandler implements AuthenticateCal
     }
 
     private String listJsonText(String value) {
-        if (value.isEmpty() || value.length() <= 1)
+        if (value.length() <= 1)
             return "[]";
         String delimiter;
         String unescapedDelimiterChar = value.substring(0, 1);

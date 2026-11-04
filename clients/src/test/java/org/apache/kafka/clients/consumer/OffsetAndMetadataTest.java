@@ -17,12 +17,14 @@
 package org.apache.kafka.clients.consumer;
 
 import org.apache.kafka.common.utils.Serializer;
-import org.junit.Test;
+
+import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.Optional;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * This test case ensures OffsetAndMetadata class is serializable and is serialization compatible.
@@ -31,9 +33,9 @@ import static org.junit.Assert.assertEquals;
  */
 public class OffsetAndMetadataTest {
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testInvalidNegativeOffset() {
-        new OffsetAndMetadata(-239L, Optional.of(15), "");
+        assertThrows(IllegalArgumentException.class, () -> new OffsetAndMetadata(-239L, Optional.of(15), ""));
     }
 
     @Test
@@ -63,4 +65,19 @@ public class OffsetAndMetadataTest {
         assertEquals(new OffsetAndMetadata(10, Optional.of(235), "test commit metadata"), deserializedObject);
     }
 
+    @Test
+    public void testEqualsWithNullAndNegativeLeaderEpoch() {
+        OffsetAndMetadata metadataWithNullEpoch = new OffsetAndMetadata(100L, Optional.empty(), "metadata");
+        OffsetAndMetadata metadataWithNegativeEpoch = new OffsetAndMetadata(100L, Optional.of(-1), "metadata");
+        assertEquals(metadataWithNullEpoch, metadataWithNegativeEpoch);
+        assertEquals(metadataWithNullEpoch.hashCode(), metadataWithNegativeEpoch.hashCode());
+    }
+
+    @Test
+    public void testEqualsWithNullAndEmptyMetadata() {
+        OffsetAndMetadata metadataWithNullMetadata = new OffsetAndMetadata(100L, Optional.of(1), null);
+        OffsetAndMetadata metadataWithEmptyMetadata = new OffsetAndMetadata(100L, Optional.of(1), "");
+        assertEquals(metadataWithNullMetadata, metadataWithEmptyMetadata);
+        assertEquals(metadataWithNullMetadata.hashCode(), metadataWithEmptyMetadata.hashCode());
+    }
 }

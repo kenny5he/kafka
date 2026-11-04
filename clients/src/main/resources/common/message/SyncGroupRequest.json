@@ -16,6 +16,7 @@
 {
   "apiKey": 14,
   "type": "request",
+  "listeners": ["broker"],
   "name": "SyncGroupRequest",
   // Versions 1 and 2 are the same as version 0.
   //
@@ -28,6 +29,10 @@
   // with the Type and Name known by the broker.
   "validVersions": "0-5",
   "flexibleVersions": "4+",
+  "headerVersions": {
+    "0-3": "1",
+    "4+": "2"
+  },
   "fields": [
     { "name": "GroupId", "type": "string", "versions": "0+", "entityType": "groupId",
       "about": "The unique group identifier." },

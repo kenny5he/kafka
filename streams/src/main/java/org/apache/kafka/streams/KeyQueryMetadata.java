@@ -16,9 +16,9 @@
  */
 package org.apache.kafka.streams;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
 import org.apache.kafka.streams.state.HostInfo;
 
-import java.util.Collections;
 import java.util.Objects;
 import java.util.Set;
 
@@ -29,13 +29,14 @@ import java.util.Set;
  * e.g: Relating with lags for that store partition.
  * NOTE: This is a point in time view. It may change as rebalances happen.
  */
+@InterfaceAudience.Public
 public class KeyQueryMetadata {
     /**
      * Sentinel to indicate that the KeyQueryMetadata is currently unavailable. This can occur during rebalance
      * operations.
      */
     public static final KeyQueryMetadata NOT_AVAILABLE =
-        new KeyQueryMetadata(HostInfo.unavailable(), Collections.emptySet(), -1);
+        new KeyQueryMetadata(HostInfo.unavailable(), Set.of(), -1);
 
     private final HostInfo activeHost;
 
@@ -50,29 +51,29 @@ public class KeyQueryMetadata {
     }
 
     /**
-     * Get the Active streams instance for given key
+     * Get the active Kafka Streams instance for given key.
      *
      * @return active instance's {@link HostInfo}
      */
-    public HostInfo getActiveHost() {
+    public HostInfo activeHost() {
         return activeHost;
     }
 
     /**
-     * Get the Streams instances that host the key as standbys
+     * Get the Kafka Streams instances that host the key as standbys.
      *
-     * @return set of standby {@link HostInfo} or a empty set, if no standbys are configured
+     * @return set of standby {@link HostInfo} or an empty set, if no standbys are configured
      */
-    public Set<HostInfo> getStandbyHosts() {
+    public Set<HostInfo> standbyHosts() {
         return standbyHosts;
     }
 
     /**
-     * Get the Store partition corresponding to the key.
+     * Get the store partition corresponding to the key.
      *
      * @return store partition number
      */
-    public int getPartition() {
+    public int partition() {
         return partition;
     }
 

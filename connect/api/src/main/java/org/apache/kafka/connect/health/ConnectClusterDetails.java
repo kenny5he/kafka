@@ -17,16 +17,19 @@
 
 package org.apache.kafka.connect.health;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
+
 /**
  * Provides immutable Connect cluster information, such as the ID of the backing Kafka cluster. The
  * Connect framework provides the implementation for this interface.
  */
+@InterfaceAudience.Public
 public interface ConnectClusterDetails {
 
     /**
      * Get the cluster ID of the Kafka cluster backing this Connect cluster.
      * 
      * @return the cluster ID of the Kafka cluster backing this Connect cluster
-     **/
+     */
     String kafkaClusterId();
 }

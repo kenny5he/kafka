@@ -16,14 +16,18 @@
  */
 package org.apache.kafka.streams.kstream.internals;
 
+import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.IntegerSerializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.KeyValueTimestamp;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.TopologyTestDriverBuilder;
 import org.apache.kafka.streams.TopologyTestDriverWrapper;
 import org.apache.kafka.streams.TopologyWrapper;
 import org.apache.kafka.streams.kstream.Consumed;
@@ -31,33 +35,41 @@ import org.apache.kafka.streams.kstream.KTable;
 import org.apache.kafka.streams.kstream.Materialized;
 import org.apache.kafka.streams.kstream.Predicate;
 import org.apache.kafka.streams.processor.internals.InternalTopologyBuilder;
-import org.apache.kafka.streams.state.ValueAndTimestamp;
-import org.apache.kafka.streams.TestInputTopic;
+import org.apache.kafka.streams.state.KeyValueStore;
+import org.apache.kafka.streams.state.Stores;
+import org.apache.kafka.streams.state.ValueTimestampHeaders;
+import org.apache.kafka.test.MockApiProcessor;
+import org.apache.kafka.test.MockApiProcessorSupplier;
 import org.apache.kafka.test.MockMapper;
-import org.apache.kafka.test.MockProcessor;
-import org.apache.kafka.test.MockProcessorSupplier;
 import org.apache.kafka.test.MockReducer;
 import org.apache.kafka.test.StreamsTestUtils;
-import org.junit.Before;
-import org.junit.Test;
+
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Properties;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SuppressWarnings("unchecked")
 public class KTableFilterTest {
     private final Consumed<String, Integer> consumed = Consumed.with(Serdes.String(), Serdes.Integer());
-    private final Properties props = StreamsTestUtils.getStreamsConfig(Serdes.String(), Serdes.Integer());
+    private Properties props = StreamsTestUtils.getStreamsConfig(Serdes.String(), Serdes.Integer());
 
-    @Before
-    public void setUp() {
+    private void setup(final boolean withHeaders) {
         // disable caching at the config level
-        props.setProperty(StreamsConfig.CACHE_MAX_BYTES_BUFFERING_CONFIG, "0");
+        props.setProperty(StreamsConfig.STATESTORE_CACHE_MAX_BYTES_CONFIG, "0");
+        if (withHeaders) {
+            props.put(StreamsConfig.DSL_STORE_FORMAT_CONFIG, StreamsConfig.DSL_STORE_FORMAT_HEADERS);
+        } else {
+            props.put(StreamsConfig.DSL_STORE_FORMAT_CONFIG, StreamsConfig.DSL_STORE_FORMAT_DEFAULT);
+        }
     }
 
     private final Predicate<String, Integer> predicate = (key, value) -> (value % 2) == 0;
@@ -66,11 +78,11 @@ public class KTableFilterTest {
                               final KTable<String, Integer> table2,
                               final KTable<String, Integer> table3,
                               final String topic) {
-        final MockProcessorSupplier<String, Integer> supplier = new MockProcessorSupplier<>();
+        final MockApiProcessorSupplier<String, Integer, Void, Void> supplier = new MockApiProcessorSupplier<>();
         table2.toStream().process(supplier);
         table3.toStream().process(supplier);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<String, Integer> inputTopic =
                     driver.createInputTopic(topic, new StringSerializer(), new IntegerSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
             inputTopic.pipeInput("A", 1, 10L);
@@ -81,7 +93,7 @@ public class KTableFilterTest {
             inputTopic.pipeInput("B", null, 15L);
         }
 
-        final List<MockProcessor<String, Integer>> processors = supplier.capturedProcessors(2);
+        final List<MockApiProcessor<String, Integer, Void, Void>> processors = supplier.capturedProcessors(2);
 
         processors.get(0).checkAndClearProcessResult(new KeyValueTimestamp<>("A", null, 10),
             new KeyValueTimestamp<>("B", 2, 5),
@@ -97,8 +109,10 @@ public class KTableFilterTest {
             new KeyValueTimestamp<>("B", null, 15));
     }
 
-    @Test
-    public void shouldPassThroughWithoutMaterialization() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldPassThroughWithoutMaterialization(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final String topic1 = "topic1";
 
@@ -113,8 +127,10 @@ public class KTableFilterTest {
         doTestKTable(builder, table2, table3, topic1);
     }
 
-    @Test
-    public void shouldPassThroughOnMaterialization() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldPassThroughOnMaterialization(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final String topic1 = "topic1";
 
@@ -161,30 +177,30 @@ public class KTableFilterTest {
             assertNull(getter2.get("B"));
             assertNull(getter2.get("C"));
 
-            assertEquals(ValueAndTimestamp.make(1, 5L), getter3.get("A"));
-            assertEquals(ValueAndTimestamp.make(1, 10L), getter3.get("B"));
-            assertEquals(ValueAndTimestamp.make(1, 15L), getter3.get("C"));
+            assertEquals(ValueTimestampHeaders.make(1, 5L, new RecordHeaders()), getter3.get("A"));
+            assertEquals(ValueTimestampHeaders.make(1, 10L, new RecordHeaders()), getter3.get("B"));
+            assertEquals(ValueTimestampHeaders.make(1, 15L, new RecordHeaders()), getter3.get("C"));
 
             inputTopic.pipeInput("A", 2, 10L);
             inputTopic.pipeInput("B", 2, 5L);
 
-            assertEquals(ValueAndTimestamp.make(2, 10L), getter2.get("A"));
-            assertEquals(ValueAndTimestamp.make(2, 5L), getter2.get("B"));
+            assertEquals(ValueTimestampHeaders.make(2, 10L, new RecordHeaders()), getter2.get("A"));
+            assertEquals(ValueTimestampHeaders.make(2, 5L, new RecordHeaders()), getter2.get("B"));
             assertNull(getter2.get("C"));
 
             assertNull(getter3.get("A"));
             assertNull(getter3.get("B"));
-            assertEquals(ValueAndTimestamp.make(1, 15L), getter3.get("C"));
+            assertEquals(ValueTimestampHeaders.make(1, 15L, new RecordHeaders()), getter3.get("C"));
 
             inputTopic.pipeInput("A", 3, 15L);
 
             assertNull(getter2.get("A"));
-            assertEquals(ValueAndTimestamp.make(2, 5L), getter2.get("B"));
+            assertEquals(ValueTimestampHeaders.make(2, 5L, new RecordHeaders()), getter2.get("B"));
             assertNull(getter2.get("C"));
 
-            assertEquals(ValueAndTimestamp.make(3, 15L), getter3.get("A"));
+            assertEquals(ValueTimestampHeaders.make(3, 15L, new RecordHeaders()), getter3.get("A"));
             assertNull(getter3.get("B"));
-            assertEquals(ValueAndTimestamp.make(1, 15L), getter3.get("C"));
+            assertEquals(ValueTimestampHeaders.make(1, 15L, new RecordHeaders()), getter3.get("C"));
 
             inputTopic.pipeInput("A", null, 10L);
             inputTopic.pipeInput("B", null, 20L);
@@ -195,12 +211,14 @@ public class KTableFilterTest {
 
             assertNull(getter3.get("A"));
             assertNull(getter3.get("B"));
-            assertEquals(ValueAndTimestamp.make(1, 15L), getter3.get("C"));
+            assertEquals(ValueTimestampHeaders.make(1, 15L, new RecordHeaders()), getter3.get("C"));
         }
     }
 
-    @Test
-    public void shouldGetValuesOnMaterialization() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldGetValuesOnMaterialization(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final String topic1 = "topic1";
 
@@ -225,12 +243,12 @@ public class KTableFilterTest {
                                           final KTableImpl<String, Integer, Integer> table1,
                                           final KTableImpl<String, Integer, Integer> table2,
                                           final String topic1) {
-        final MockProcessorSupplier<String, Integer> supplier = new MockProcessorSupplier<>();
+        final MockApiProcessorSupplier<String, Integer, Void, Void> supplier = new MockApiProcessorSupplier<>();
 
         builder.build().addProcessor("proc1", supplier, table1.name);
         builder.build().addProcessor("proc2", supplier, table2.name);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(builder.build()).withConfig(props).build()) {
             final TestInputTopic<String, Integer> inputTopic =
                     driver.createInputTopic(topic1, new StringSerializer(), new IntegerSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
 
@@ -238,7 +256,7 @@ public class KTableFilterTest {
             inputTopic.pipeInput("B", 1, 10L);
             inputTopic.pipeInput("C", 1, 15L);
 
-            final List<MockProcessor<String, Integer>> processors = supplier.capturedProcessors(2);
+            final List<MockApiProcessor<String, Integer, Void, Void>> processors = supplier.capturedProcessors(2);
 
             processors.get(0).checkAndClearProcessResult(new KeyValueTimestamp<>("A", new Change<>(1, null), 5),
                 new KeyValueTimestamp<>("B", new Change<>(1, null), 10),
@@ -270,8 +288,10 @@ public class KTableFilterTest {
     }
 
 
-    @Test
-    public void shouldNotSendOldValuesWithoutMaterialization() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotSendOldValuesWithoutMaterialization(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final String topic1 = "topic1";
 
@@ -282,8 +302,10 @@ public class KTableFilterTest {
         doTestNotSendingOldValue(builder, table1, table2, topic1);
     }
 
-    @Test
-    public void shouldNotSendOldValuesOnMaterialization() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotSendOldValuesOnMaterialization(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final String topic1 = "topic1";
 
@@ -295,19 +317,35 @@ public class KTableFilterTest {
         doTestNotSendingOldValue(builder, table1, table2, topic1);
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotEnableSendingOldValuesIfNotAlreadyMaterializedAndNotForcedToMaterialize(final boolean withHeaders) {
+        setup(withHeaders);
+        final StreamsBuilder builder = new StreamsBuilder();
+        final String topic1 = "topic1";
+
+        final KTableImpl<String, Integer, Integer> table1 =
+            (KTableImpl<String, Integer, Integer>) builder.table(topic1, consumed);
+        final KTableImpl<String, Integer, Integer> table2 = (KTableImpl<String, Integer, Integer>) table1.filter(predicate);
+
+        table2.enableSendingOldValues(false);
+
+        doTestNotSendingOldValue(builder, table1, table2, topic1);
+    }
+
     private void doTestSendingOldValue(final StreamsBuilder builder,
                                        final KTableImpl<String, Integer, Integer> table1,
                                        final KTableImpl<String, Integer, Integer> table2,
                                        final String topic1) {
-        table2.enableSendingOldValues();
-
-        final MockProcessorSupplier<String, Integer> supplier = new MockProcessorSupplier<>();
+        final MockApiProcessorSupplier<String, Integer, Void, Void> supplier = new MockApiProcessorSupplier<>();
         final Topology topology = builder.build();
 
         topology.addProcessor("proc1", supplier, table1.name);
         topology.addProcessor("proc2", supplier, table2.name);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(topology, props)) {
+        final boolean parentSendOldVals = table1.sendingOldValueEnabled();
+
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(topology).withConfig(props).build()) {
             final TestInputTopic<String, Integer> inputTopic =
                     driver.createInputTopic(topic1, new StringSerializer(), new IntegerSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
 
@@ -315,37 +353,55 @@ public class KTableFilterTest {
             inputTopic.pipeInput("B", 1, 10L);
             inputTopic.pipeInput("C", 1, 15L);
 
-            final List<MockProcessor<String, Integer>> processors = supplier.capturedProcessors(2);
+            final List<MockApiProcessor<String, Integer, Void, Void>> processors = supplier.capturedProcessors(2);
+            final MockApiProcessor<String, Integer, Void, Void> table1Output = processors.get(0);
+            final MockApiProcessor<String, Integer, Void, Void> table2Output = processors.get(1);
 
-            processors.get(0).checkAndClearProcessResult(new KeyValueTimestamp<>("A", new Change<>(1, null), 5),
+            table1Output.checkAndClearProcessResult(
+                new KeyValueTimestamp<>("A", new Change<>(1, null), 5),
                 new KeyValueTimestamp<>("B", new Change<>(1, null), 10),
-                new KeyValueTimestamp<>("C", new Change<>(1, null), 15));
-            processors.get(1).checkEmptyAndClearProcessResult();
+                new KeyValueTimestamp<>("C", new Change<>(1, null), 15)
+            );
+            table2Output.checkEmptyAndClearProcessResult();
 
             inputTopic.pipeInput("A", 2, 15L);
             inputTopic.pipeInput("B", 2, 8L);
 
-            processors.get(0).checkAndClearProcessResult(new KeyValueTimestamp<>("A", new Change<>(2, 1), 15),
-                new KeyValueTimestamp<>("B", new Change<>(2, 1), 8));
-            processors.get(1).checkAndClearProcessResult(new KeyValueTimestamp<>("A", new Change<>(2, null), 15),
-                new KeyValueTimestamp<>("B", new Change<>(2, null), 8));
+            table1Output.checkAndClearProcessResult(
+                new KeyValueTimestamp<>("A", new Change<>(2, parentSendOldVals ? 1 : null), 15),
+                new KeyValueTimestamp<>("B", new Change<>(2, parentSendOldVals ? 1 : null), 8)
+            );
+            table2Output.checkAndClearProcessResult(
+                new KeyValueTimestamp<>("A", new Change<>(2, null), 15),
+                new KeyValueTimestamp<>("B", new Change<>(2, null), 8)
+            );
 
             inputTopic.pipeInput("A", 3, 20L);
 
-            processors.get(0).checkAndClearProcessResult(new KeyValueTimestamp<>("A", new Change<>(3, 2), 20));
-            processors.get(1).checkAndClearProcessResult(new KeyValueTimestamp<>("A", new Change<>(null, 2), 20));
+            table1Output.checkAndClearProcessResult(
+                new KeyValueTimestamp<>("A", new Change<>(3, parentSendOldVals ? 2 : null), 20)
+            );
+            table2Output.checkAndClearProcessResult(
+                new KeyValueTimestamp<>("A", new Change<>(null, 2), 20)
+            );
 
             inputTopic.pipeInput("A", null, 10L);
             inputTopic.pipeInput("B", null, 20L);
 
-            processors.get(0).checkAndClearProcessResult(new KeyValueTimestamp<>("A", new Change<>(null, 3), 10),
-                new KeyValueTimestamp<>("B", new Change<>(null, 2), 20));
-            processors.get(1).checkAndClearProcessResult(new KeyValueTimestamp<>("B", new Change<>(null, 2), 20));
+            table1Output.checkAndClearProcessResult(
+                new KeyValueTimestamp<>("A", new Change<>(null, parentSendOldVals ? 3 : null), 10),
+                new KeyValueTimestamp<>("B", new Change<>(null, parentSendOldVals ? 2 : null), 20)
+            );
+            table2Output.checkAndClearProcessResult(
+                new KeyValueTimestamp<>("B", new Change<>(null, 2), 20)
+            );
         }
     }
 
-    @Test
-    public void shouldSendOldValuesWhenEnabledWithoutMaterialization() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldEnableSendOldValuesWhenNotMaterializedAlreadyButForcedToMaterialize(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final String topic1 = "topic1";
 
@@ -354,11 +410,18 @@ public class KTableFilterTest {
         final KTableImpl<String, Integer, Integer> table2 =
             (KTableImpl<String, Integer, Integer>) table1.filter(predicate);
 
+        table2.enableSendingOldValues(true);
+
+        assertTrue(table1.sendingOldValueEnabled());
+        assertTrue(table2.sendingOldValueEnabled());
+
         doTestSendingOldValue(builder, table1, table2, topic1);
     }
 
-    @Test
-    public void shouldSendOldValuesWhenEnabledOnMaterialization() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldEnableSendOldValuesWhenMaterializedAlreadyAndForcedToMaterialize(final boolean withHeaders) {
+        setup(withHeaders);
         final StreamsBuilder builder = new StreamsBuilder();
         final String topic1 = "topic1";
 
@@ -367,20 +430,46 @@ public class KTableFilterTest {
         final KTableImpl<String, Integer, Integer> table2 =
             (KTableImpl<String, Integer, Integer>) table1.filter(predicate, Materialized.as("store2"));
 
+        table2.enableSendingOldValues(true);
+
+        assertFalse(table1.sendingOldValueEnabled());
+        assertTrue(table2.sendingOldValueEnabled());
+
+        doTestSendingOldValue(builder, table1, table2, topic1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldSendOldValuesWhenEnabledOnUpStreamMaterialization(final boolean withHeaders) {
+        setup(withHeaders);
+        final StreamsBuilder builder = new StreamsBuilder();
+        final String topic1 = "topic1";
+
+        final KTableImpl<String, Integer, Integer> table1 =
+            (KTableImpl<String, Integer, Integer>) builder.table(topic1, consumed, Materialized.as("store2"));
+        final KTableImpl<String, Integer, Integer> table2 =
+            (KTableImpl<String, Integer, Integer>) table1.filter(predicate);
+
+        table2.enableSendingOldValues(false);
+
+        assertTrue(table1.sendingOldValueEnabled());
+        assertTrue(table2.sendingOldValueEnabled());
+
         doTestSendingOldValue(builder, table1, table2, topic1);
     }
 
     private void doTestSkipNullOnMaterialization(final StreamsBuilder builder,
                                                  final KTableImpl<String, String, String> table1,
                                                  final KTableImpl<String, String, String> table2,
-                                                 final String topic1) {
-        final MockProcessorSupplier<String, String> supplier = new MockProcessorSupplier<>();
+                                                 final String topic1,
+                                                 final boolean shouldSkip) {
+        final MockApiProcessorSupplier<String, String, Void, Void> supplier = new MockApiProcessorSupplier<>();
         final Topology topology = builder.build();
 
         topology.addProcessor("proc1", supplier, table1.name);
         topology.addProcessor("proc2", supplier, table2.name);
 
-        try (final TopologyTestDriver driver = new TopologyTestDriver(topology, props)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriverBuilder(topology).withConfig(props).build()) {
             final TestInputTopic<String, String> stringinputTopic =
                     driver.createInputTopic(topic1, new StringSerializer(), new StringSerializer(), Instant.ofEpochMilli(0L), Duration.ZERO);
 
@@ -389,15 +478,23 @@ public class KTableFilterTest {
             stringinputTopic.pipeInput("C", "reject", 20L);
         }
 
-        final List<MockProcessor<String, String>> processors = supplier.capturedProcessors(2);
+        final List<MockApiProcessor<String, String, Void, Void>> processors = supplier.capturedProcessors(2);
         processors.get(0).checkAndClearProcessResult(new KeyValueTimestamp<>("A", new Change<>("reject", null), 5),
             new KeyValueTimestamp<>("B", new Change<>("reject", null), 10),
             new KeyValueTimestamp<>("C", new Change<>("reject", null), 20));
-        processors.get(1).checkEmptyAndClearProcessResult();
+        if (shouldSkip) {
+            processors.get(1).checkEmptyAndClearProcessResult();
+        } else {
+            processors.get(1).checkAndClearProcessResult(new KeyValueTimestamp<>("A", new Change<>(null, null), 5),
+                new KeyValueTimestamp<>("B", new Change<>(null, null), 10),
+                new KeyValueTimestamp<>("C", new Change<>(null, null), 20));
+        }
     }
 
-    @Test
-    public void shouldSkipNullToRepartitionWithoutMaterialization() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldSkipNullToRepartitionWithoutMaterialization(final boolean withHeaders) {
+        setup(withHeaders);
         // Do not explicitly set enableSendingOldValues. Let a further downstream stateful operator trigger it instead.
         final StreamsBuilder builder = new StreamsBuilder();
 
@@ -407,15 +504,17 @@ public class KTableFilterTest {
         final KTableImpl<String, String, String> table1 =
             (KTableImpl<String, String, String>) builder.table(topic1, consumed);
         final KTableImpl<String, String, String> table2 =
-            (KTableImpl<String, String, String>) table1.filter((key, value) -> value.equalsIgnoreCase("accept"))
-                .groupBy(MockMapper.noOpKeyValueMapper())
-                .reduce(MockReducer.STRING_ADDER, MockReducer.STRING_REMOVER);
+            (KTableImpl<String, String, String>) table1.filter((key, value) -> value.equalsIgnoreCase("accept"));
+        table2.groupBy(MockMapper.noOpKeyValueMapper())
+            .reduce(MockReducer.STRING_ADDER, MockReducer.STRING_REMOVER);
 
-        doTestSkipNullOnMaterialization(builder, table1, table2, topic1);
+        doTestSkipNullOnMaterialization(builder, table1, table2, topic1, true);
     }
 
-    @Test
-    public void shouldSkipNullToRepartitionOnMaterialization() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldSkipNullToRepartitionOnMaterialization(final boolean withHeaders) {
+        setup(withHeaders);
         // Do not explicitly set enableSendingOldValues. Let a further downstream stateful operator trigger it instead.
         final StreamsBuilder builder = new StreamsBuilder();
 
@@ -425,15 +524,64 @@ public class KTableFilterTest {
         final KTableImpl<String, String, String> table1 =
             (KTableImpl<String, String, String>) builder.table(topic1, consumed);
         final KTableImpl<String, String, String> table2 =
-            (KTableImpl<String, String, String>) table1.filter((key, value) -> value.equalsIgnoreCase("accept"), Materialized.as("store2"))
-                .groupBy(MockMapper.noOpKeyValueMapper())
-                .reduce(MockReducer.STRING_ADDER, MockReducer.STRING_REMOVER, Materialized.as("mock-result"));
+            (KTableImpl<String, String, String>) table1.filter((key, value) -> value.equalsIgnoreCase("accept"), Materialized.as("store2"));
+        table2.groupBy(MockMapper.noOpKeyValueMapper())
+            .reduce(MockReducer.STRING_ADDER, MockReducer.STRING_REMOVER, Materialized.as("mock-result"));
 
-        doTestSkipNullOnMaterialization(builder, table1, table2, topic1);
+        doTestSkipNullOnMaterialization(builder, table1, table2, topic1, true);
     }
 
-    @Test
-    public void testTypeVariance() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldNotSkipNullIfVersionedUpstream(final boolean withHeaders) {
+        setup(withHeaders);
+        // stateful downstream operation enables sendOldValues, but duplicate nulls will still
+        // be sent because the source table is versioned
+        final StreamsBuilder builder = new StreamsBuilder();
+
+        final String topic1 = "topic1";
+        final Materialized<String, String, KeyValueStore<Bytes, byte[]>> versionedMaterialize =
+            Materialized.as(Stores.persistentVersionedKeyValueStore("versioned", Duration.ofMinutes(5)));
+        final Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
+
+        final KTableImpl<String, String, String> table1 =
+            (KTableImpl<String, String, String>) builder.table(topic1, consumed, versionedMaterialize);
+        final KTableImpl<String, String, String> table2 =
+            (KTableImpl<String, String, String>) table1.filter((key, value) -> value.equalsIgnoreCase("accept"));
+        table2.groupBy(MockMapper.noOpKeyValueMapper())
+            .reduce(MockReducer.STRING_ADDER, MockReducer.STRING_REMOVER);
+
+        doTestSkipNullOnMaterialization(builder, table1, table2, topic1, false);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void shouldSkipNullIfVersionedDownstream(final boolean withHeaders) {
+        setup(withHeaders);
+        // materializing the result of the filter as a versioned store does not prevent duplicate
+        // tombstones from being sent, as it's whether the input table is versioned or not that
+        // determines whether the optimization is enabled
+        final StreamsBuilder builder = new StreamsBuilder();
+
+        final String topic1 = "topic1";
+        final Materialized<String, String, KeyValueStore<Bytes, byte[]>> versionedMaterialize =
+            Materialized.as(Stores.persistentVersionedKeyValueStore("versioned", Duration.ofMinutes(5)));
+        final Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
+
+        final KTableImpl<String, String, String> table1 =
+            (KTableImpl<String, String, String>) builder.table(topic1, consumed, Materialized.as("store"));
+        final KTableImpl<String, String, String> table2 =
+            (KTableImpl<String, String, String>) table1.filter((key, value) -> value.equalsIgnoreCase("accept"), versionedMaterialize);
+        table2.groupBy(MockMapper.noOpKeyValueMapper())
+            .reduce(MockReducer.STRING_ADDER, MockReducer.STRING_REMOVER);
+
+        doTestSkipNullOnMaterialization(builder, table1, table2, topic1, true);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void testTypeVariance(final boolean withHeaders) {
+        setup(withHeaders);
         final Predicate<Number, Object> numberKeyPredicate = (key, value) -> false;
 
         new StreamsBuilder()

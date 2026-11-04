@@ -18,8 +18,10 @@ package org.apache.kafka.clients.consumer;
 
 import org.apache.kafka.clients.consumer.internals.AbstractPartitionAssignor;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.utils.CircularIterator;
+import org.apache.kafka.common.annotation.InterfaceAudience;
+import org.apache.kafka.common.annotation.SuppressKafkaInternalApiUsage;
 import org.apache.kafka.common.utils.Utils;
+import org.apache.kafka.common.utils.internals.CircularIterator;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -97,7 +99,10 @@ import java.util.TreeSet;
  * <li><code>I2: [t0p2, t1p2]</code>
  * </ul>
  */
+@InterfaceAudience.Public
+@SuppressKafkaInternalApiUsage("KIP-1265: extends internal AbstractPartitionAssignor — pending KIP review to promote the parent or refactor the assignor hierarchy")
 public class RoundRobinAssignor extends AbstractPartitionAssignor {
+    public static final String ROUNDROBIN_ASSIGNOR_NAME = "roundrobin";
 
     @Override
     public Map<String, List<TopicPartition>> assign(Map<String, Integer> partitionsPerTopic,
@@ -138,7 +143,7 @@ public class RoundRobinAssignor extends AbstractPartitionAssignor {
 
     @Override
     public String name() {
-        return "roundrobin";
+        return ROUNDROBIN_ASSIGNOR_NAME;
     }
 
 }

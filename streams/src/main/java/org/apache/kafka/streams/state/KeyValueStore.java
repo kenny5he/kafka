@@ -16,7 +16,9 @@
  */
 package org.apache.kafka.streams.state;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
 import org.apache.kafka.streams.KeyValue;
+import org.apache.kafka.streams.errors.InvalidStateStoreException;
 import org.apache.kafka.streams.processor.StateStore;
 
 import java.util.List;
@@ -27,26 +29,29 @@ import java.util.List;
  * @param <K> The key type
  * @param <V> The value type
  */
+@InterfaceAudience.Public
 public interface KeyValueStore<K, V> extends StateStore, ReadOnlyKeyValueStore<K, V> {
 
     /**
      * Update the value associated with this key.
      *
-     * @param key The key to associate the value to
+     * @param key   The key to associate the value to
      * @param value The value to update, it can be {@code null};
      *              if the serialized bytes are also {@code null} it is interpreted as deletes
      * @throws NullPointerException If {@code null} is used for key.
+     * @throws InvalidStateStoreException if the store is not initialized
      */
     void put(K key, V value);
 
     /**
      * Update the value associated with this key, unless a value is already associated with the key.
      *
-     * @param key The key to associate the value to
+     * @param key   The key to associate the value to
      * @param value The value to update, it can be {@code null};
      *              if the serialized bytes are also {@code null} it is interpreted as deletes
      * @return The old value or {@code null} if there is no such key.
      * @throws NullPointerException If {@code null} is used for key.
+     * @throws InvalidStateStoreException if the store is not initialized
      */
     V putIfAbsent(K key, V value);
 
@@ -56,6 +61,7 @@ public interface KeyValueStore<K, V> extends StateStore, ReadOnlyKeyValueStore<K
      * @param entries A list of entries to put into the store;
      *                if the serialized bytes are also {@code null} it is interpreted as deletes
      * @throws NullPointerException If {@code null} is used for key.
+     * @throws InvalidStateStoreException if the store is not initialized
      */
     void putAll(List<KeyValue<K, V>> entries);
 
@@ -65,6 +71,7 @@ public interface KeyValueStore<K, V> extends StateStore, ReadOnlyKeyValueStore<K
      * @param key The key
      * @return The old value or {@code null} if there is no such key.
      * @throws NullPointerException If {@code null} is used for key.
+     * @throws InvalidStateStoreException if the store is not initialized
      */
     V delete(K key);
 }

@@ -14,107 +14,101 @@
   * See the License for the specific language governing permissions and
   * limitations under the License.
   */
-package unit.kafka.cluster
+package kafka.cluster
 
-import kafka.cluster.SimpleAssignmentState
-import org.apache.kafka.common.message.LeaderAndIsrRequestData.LeaderAndIsrPartitionState
-import org.junit.Assert.{assertEquals, assertFalse, assertTrue}
-import org.junit.Test
-import org.junit.runner.RunWith
-import org.junit.runners.Parameterized
-import org.junit.runners.Parameterized.Parameters
+import org.apache.kafka.common.DirectoryId
+import org.apache.kafka.metadata.{LeaderRecoveryState, PartitionRegistration}
+import org.apache.kafka.server.partition.SimpleAssignmentState
+import org.junit.jupiter.api.Assertions.{assertEquals, assertFalse, assertTrue}
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.{Arguments, MethodSource}
 
-import scala.jdk.CollectionConverters._
+import java.util
 
-object AssignmentStateTest extends AbstractPartitionTest {
+object AssignmentStateTest {
+  import AbstractPartitionTest._
 
-  @Parameters
-  def data: Array[Array[Any]] = Seq[Array[Any]](
-    Array(
-      List[Integer](brokerId, brokerId + 1, brokerId + 2),
-      List[Integer](brokerId, brokerId + 1, brokerId + 2),
-      List.empty[Integer], List.empty[Integer], Seq.empty[Int], false),
-    Array(
-      List[Integer](brokerId, brokerId + 1),
-      List[Integer](brokerId, brokerId + 1, brokerId + 2),
-      List.empty[Integer], List.empty[Integer], Seq.empty[Int], true),
-    Array(
-      List[Integer](brokerId, brokerId + 1, brokerId + 2),
-      List[Integer](brokerId, brokerId + 1, brokerId + 2),
-      List[Integer](brokerId + 3, brokerId + 4),
-      List[Integer](brokerId + 1),
-      Seq(brokerId, brokerId + 1, brokerId + 2), false),
-    Array(
-      List[Integer](brokerId, brokerId + 1, brokerId + 2),
-      List[Integer](brokerId, brokerId + 1, brokerId + 2),
-      List[Integer](brokerId + 3, brokerId + 4),
-      List.empty[Integer],
-      Seq(brokerId, brokerId + 1, brokerId + 2), false),
-    Array(
-      List[Integer](brokerId, brokerId + 1, brokerId + 2),
-      List[Integer](brokerId, brokerId + 1, brokerId + 2),
-      List.empty[Integer],
-      List[Integer](brokerId + 1),
-      Seq(brokerId, brokerId + 1, brokerId + 2), false),
-    Array(
-      List[Integer](brokerId + 1, brokerId + 2),
-      List[Integer](brokerId + 1, brokerId + 2),
-      List[Integer](brokerId),
-      List.empty[Integer],
-      Seq(brokerId + 1, brokerId + 2), false),
-    Array(
-      List[Integer](brokerId + 2, brokerId + 3, brokerId + 4),
-      List[Integer](brokerId, brokerId + 1, brokerId + 2),
-      List[Integer](brokerId + 3, brokerId + 4, brokerId + 5),
-      List.empty[Integer],
-      Seq(brokerId, brokerId + 1, brokerId + 2), false),
-    Array(
-      List[Integer](brokerId + 2, brokerId + 3, brokerId + 4),
-      List[Integer](brokerId, brokerId + 1, brokerId + 2),
-      List[Integer](brokerId + 3, brokerId + 4, brokerId + 5),
-      List.empty[Integer],
-      Seq(brokerId, brokerId + 1, brokerId + 2), false),
-    Array(
-      List[Integer](brokerId + 2, brokerId + 3),
-      List[Integer](brokerId, brokerId + 1, brokerId + 2),
-      List[Integer](brokerId + 3, brokerId + 4, brokerId + 5),
-      List.empty[Integer],
-      Seq(brokerId, brokerId + 1, brokerId + 2), true)
-  ).toArray
+  def parameters: util.stream.Stream[Arguments] = util.List.of[Arguments](
+    Arguments.of(
+      Array(brokerId, brokerId + 1, brokerId + 2),
+      Array(brokerId, brokerId + 1, brokerId + 2),
+      Array.emptyIntArray, Array.emptyIntArray, util.List.of[Int], Boolean.box(false)),
+    Arguments.of(
+      Array(brokerId, brokerId + 1),
+      Array(brokerId, brokerId + 1, brokerId + 2),
+      Array.emptyIntArray, Array.emptyIntArray, util.List.of[Int], Boolean.box(true)),
+    Arguments.of(
+      Array(brokerId, brokerId + 1, brokerId + 2),
+      Array(brokerId, brokerId + 1, brokerId + 2),
+      Array(brokerId + 3, brokerId + 4),
+      Array(brokerId + 1),
+      util.List.of(brokerId, brokerId + 1, brokerId + 2), Boolean.box(false)),
+    Arguments.of(
+      Array(brokerId, brokerId + 1, brokerId + 2),
+      Array(brokerId, brokerId + 1, brokerId + 2),
+      Array(brokerId + 3, brokerId + 4),
+      Array.emptyIntArray,
+      util.List.of(brokerId, brokerId + 1, brokerId + 2), Boolean.box(false)),
+    Arguments.of(
+      Array(brokerId, brokerId + 1, brokerId + 2),
+      Array(brokerId, brokerId + 1, brokerId + 2),
+      Array.emptyIntArray,
+      Array(brokerId + 1),
+      util.List.of(brokerId, brokerId + 1, brokerId + 2), Boolean.box(false)),
+    Arguments.of(
+      Array(brokerId + 1, brokerId + 2),
+      Array(brokerId + 1, brokerId + 2),
+      Array(brokerId),
+      Array.emptyIntArray,
+      util.List.of(brokerId + 1, brokerId + 2), Boolean.box(false)),
+    Arguments.of(
+      Array(brokerId + 2, brokerId + 3, brokerId + 4),
+      Array(brokerId, brokerId + 1, brokerId + 2),
+      Array(brokerId + 3, brokerId + 4, brokerId + 5),
+      Array.emptyIntArray,
+      util.List.of(brokerId, brokerId + 1, brokerId + 2), Boolean.box(false)),
+    Arguments.of(
+      Array(brokerId + 2, brokerId + 3, brokerId + 4),
+      Array(brokerId, brokerId + 1, brokerId + 2),
+      Array(brokerId + 3, brokerId + 4, brokerId + 5),
+      Array.emptyIntArray,
+      util.List.of(brokerId, brokerId + 1, brokerId + 2), Boolean.box(false)),
+    Arguments.of(
+      Array(brokerId + 2, brokerId + 3),
+      Array(brokerId, brokerId + 1, brokerId + 2),
+      Array(brokerId + 3, brokerId + 4, brokerId + 5),
+      Array.emptyIntArray,
+      util.List.of(brokerId, brokerId + 1, brokerId + 2), Boolean.box(true))
+  ).stream()
 }
 
-@RunWith(classOf[Parameterized])
-class AssignmentStateTest(isr: List[Integer], replicas: List[Integer],
-                          adding: List[Integer], removing: List[Integer],
-                          original: Seq[Int], isUnderReplicated: Boolean) extends AbstractPartitionTest {
+class AssignmentStateTest extends AbstractPartitionTest {
 
-  @Test
-  def testPartitionAssignmentStatus(): Unit = {
-    val controllerEpoch = 3
-
-    val leaderState = new LeaderAndIsrPartitionState()
-      .setControllerEpoch(controllerEpoch)
+  @ParameterizedTest
+  @MethodSource(Array("parameters"))
+  def testPartitionAssignmentStatus(isr: Array[Int], replicas: Array[Int],
+                                    adding: Array[Int], removing: Array[Int],
+                                    original: util.List[Integer], isUnderReplicated: Boolean): Unit = {
+    val partitionRegistration = new PartitionRegistration.Builder()
       .setLeader(brokerId)
+      .setLeaderRecoveryState(LeaderRecoveryState.RECOVERED)
       .setLeaderEpoch(6)
-      .setIsr(isr.asJava)
-      .setZkVersion(1)
-      .setReplicas(replicas.asJava)
-      .setIsNew(false)
-    if (adding.nonEmpty)
-      leaderState.setAddingReplicas(adding.asJava)
-    if (removing.nonEmpty)
-      leaderState.setRemovingReplicas(removing.asJava)
-
-    val isReassigning = adding.nonEmpty || removing.nonEmpty
+      .setIsr(isr)
+      .setPartitionEpoch(1)
+      .setReplicas(replicas)
+      .setDirectories(DirectoryId.unassignedArray(replicas.length))
+      .setAddingReplicas(adding)
+      .setRemovingReplicas(removing)
+      .build()
 
     // set the original replicas as the URP calculation will need them
-    if (original.nonEmpty)
-      partition.assignmentState = SimpleAssignmentState(original)
+    if (!original.isEmpty)
+      partition.assignmentState = new SimpleAssignmentState(original)
     // do the test
-    partition.makeLeader(leaderState, offsetCheckpoints)
+    partition.makeLeader(partitionRegistration, isNew = false, offsetCheckpoints, None)
+    val isReassigning = !adding.isEmpty || !removing.isEmpty
     assertEquals(isReassigning, partition.isReassigning)
-    if (adding.nonEmpty)
-      adding.foreach(r => assertTrue(partition.isAddingReplica(r)))
+    adding.foreach(r => assertTrue(partition.isAddingReplica(r)))
     if (adding.contains(brokerId))
       assertTrue(partition.isAddingLocalReplica)
     else

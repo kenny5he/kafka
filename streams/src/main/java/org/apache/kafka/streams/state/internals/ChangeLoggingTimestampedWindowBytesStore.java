@@ -16,26 +16,30 @@
  */
 package org.apache.kafka.streams.state.internals;
 
+import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.state.WindowStore;
 
 import static org.apache.kafka.streams.state.internals.ValueAndTimestampDeserializer.rawValue;
 import static org.apache.kafka.streams.state.internals.ValueAndTimestampDeserializer.timestamp;
 
-class ChangeLoggingTimestampedWindowBytesStore extends ChangeLoggingWindowBytesStore {
+public class ChangeLoggingTimestampedWindowBytesStore extends ChangeLoggingWindowBytesStore {
 
     ChangeLoggingTimestampedWindowBytesStore(final WindowStore<Bytes, byte[]> bytesStore,
                                              final boolean retainDuplicates) {
-        super(bytesStore, retainDuplicates);
+        super(bytesStore, retainDuplicates, WindowKeySchema::toStoreKeyBinary);
     }
 
     @Override
     void log(final Bytes key,
              final byte[] valueAndTimestamp) {
-        if (valueAndTimestamp != null) {
-            context.logChange(name(), key, rawValue(valueAndTimestamp), timestamp(valueAndTimestamp));
-        } else {
-            context.logChange(name(), key, null, context.timestamp());
-        }
+        internalContext.logChange(
+            name(),
+            key,
+            rawValue(valueAndTimestamp),
+            valueAndTimestamp != null ? timestamp(valueAndTimestamp) : internalContext.recordContext().timestamp(),
+            new RecordHeaders(),
+            wrapped().getPosition()
+        );
     }
 }

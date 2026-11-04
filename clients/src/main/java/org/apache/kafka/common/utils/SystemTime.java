@@ -16,15 +16,16 @@
  */
 package org.apache.kafka.common.utils;
 
-import org.apache.kafka.common.errors.TimeoutException;
-
-import java.util.function.Supplier;
-
 /**
  * A time implementation that uses the system clock and sleep call. Use `Time.SYSTEM` instead of creating an instance
  * of this class.
  */
-public class SystemTime implements Time {
+class SystemTime implements Time {
+    private static final SystemTime SYSTEM_TIME = new SystemTime();
+
+    public static SystemTime getSystemTime() {
+        return SYSTEM_TIME;
+    }
 
     @Override
     public long milliseconds() {
@@ -41,20 +42,7 @@ public class SystemTime implements Time {
         Utils.sleep(ms);
     }
 
-    @Override
-    public void waitObject(Object obj, Supplier<Boolean> condition, long deadlineMs) throws InterruptedException {
-        synchronized (obj) {
-            while (true) {
-                if (condition.get())
-                    return;
+    private SystemTime() {
 
-                long currentTimeMs = milliseconds();
-                if (currentTimeMs >= deadlineMs)
-                    throw new TimeoutException("Condition not satisfied before deadline");
-
-                obj.wait(deadlineMs - currentTimeMs);
-            }
-        }
     }
-
 }

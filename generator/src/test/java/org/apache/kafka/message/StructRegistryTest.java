@@ -17,21 +17,20 @@
 
 package org.apache.kafka.message;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.Timeout;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
+@Timeout(120)
 public class StructRegistryTest {
-    @Rule
-    final public Timeout globalTimeout = Timeout.millis(120000);
 
     @Test
     public void testCommonStructs() throws Exception {
@@ -39,7 +38,10 @@ public class StructRegistryTest {
                 "{",
                 "  \"type\": \"request\",",
                 "  \"name\": \"LeaderAndIsrRequest\",",
-                "  \"validVersions\": \"0-2\",",
+                "  \"validVersions\": \"0-4\",",
+                "  \"deprecatedVersions\": \"0-1\",",
+                "  \"flexibleVersions\": \"0+\",",
+                "  \"headerVersions\": { \"0+\": \"2\" },",
                 "  \"fields\": [",
                 "    { \"name\": \"field1\", \"type\": \"int32\", \"versions\": \"0+\" },",
                 "    { \"name\": \"field2\", \"type\": \"[]TestCommonStruct\", \"versions\": \"1+\" },",
@@ -56,8 +58,7 @@ public class StructRegistryTest {
                 "}")), MessageSpec.class);
         StructRegistry structRegistry = new StructRegistry();
         structRegistry.register(testMessageSpec);
-        assertEquals(Collections.singleton("TestCommonStruct"),
-                structRegistry.commonStructNames());
+        assertEquals(Collections.singleton("TestCommonStruct"), structRegistry.commonStructNames());
         assertFalse(structRegistry.isStructArrayWithKeys(testMessageSpec.fields().get(1)));
         assertFalse(structRegistry.isStructArrayWithKeys(testMessageSpec.fields().get(2)));
         assertTrue(structRegistry.commonStructs().hasNext());
@@ -71,6 +72,8 @@ public class StructRegistryTest {
                 "  \"type\": \"request\",",
                 "  \"name\": \"LeaderAndIsrRequest\",",
                 "  \"validVersions\": \"0-2\",",
+                "  \"flexibleVersions\": \"0+\",",
+                "  \"headerVersions\": { \"0+\": \"2\" },",
                 "  \"fields\": [",
                 "    { \"name\": \"field1\", \"type\": \"int32\", \"versions\": \"0+\" },",
                 "    { \"name\": \"field2\", \"type\": \"[]TestCommonStruct\", \"versions\": \"0+\", ",
@@ -101,6 +104,8 @@ public class StructRegistryTest {
                 "  \"type\": \"request\",",
                 "  \"name\": \"LeaderAndIsrRequest\",",
                 "  \"validVersions\": \"0-2\",",
+                "  \"flexibleVersions\": \"0+\",",
+                "  \"headerVersions\": { \"0+\": \"2\" },",
                 "  \"fields\": [",
                 "    { \"name\": \"field1\", \"type\": \"int32\", \"versions\": \"0+\" }",
                 "  ],",
@@ -129,6 +134,8 @@ public class StructRegistryTest {
                 "  \"type\": \"request\",",
                 "  \"name\": \"LeaderAndIsrRequest\",",
                 "  \"validVersions\": \"0-2\",",
+                "  \"flexibleVersions\": \"0+\",",
+                "  \"headerVersions\": { \"0+\": \"2\" },",
                 "  \"fields\": [",
                 "    { \"name\": \"field1\", \"type\": \"int32\", \"versions\": \"0+\" },",
                 "    { \"name\": \"field2\", \"type\": \"TestInlineStruct\", \"versions\": \"0+\", ",
@@ -143,8 +150,26 @@ public class StructRegistryTest {
         FieldSpec field2 = testMessageSpec.fields().get(1);
         assertTrue(field2.type().isStruct());
         assertEquals("TestInlineStruct", field2.type().toString());
+        assertEquals("field2", field2.name());
 
-        assertEquals("field2", structRegistry.findStruct(field2).name());
+        assertEquals("TestInlineStruct", structRegistry.findStruct(field2).name());
         assertFalse(structRegistry.isStructArrayWithKeys(field2));
+    }
+
+    @Test
+    public void testValidVersionsIsNone() throws Exception {
+        MessageSpec testMessageSpec = MessageGenerator.JSON_SERDE.readValue(String.join("", List.of(
+                "{",
+                "  \"type\": \"request\",",
+                "  \"name\": \"FooBar\",",
+                "  \"validVersions\": \"none\"",
+                "}")), MessageSpec.class);
+        StructRegistry structRegistry = new StructRegistry();
+        structRegistry.register(testMessageSpec);
+
+        assertFalse(testMessageSpec.hasValidVersion());
+        assertEquals(List.of(), testMessageSpec.fields());
+        assertFalse(structRegistry.structs().hasNext());
+        assertFalse(structRegistry.commonStructs().hasNext());
     }
 }

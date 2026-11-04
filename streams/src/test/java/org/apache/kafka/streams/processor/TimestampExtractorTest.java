@@ -17,10 +17,12 @@
 package org.apache.kafka.streams.processor;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.record.TimestampType;
 
-import static org.hamcrest.CoreMatchers.is;
-import static org.hamcrest.MatcherAssert.assertThat;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class TimestampExtractorTest {
 
@@ -36,13 +38,14 @@ class TimestampExtractorTest {
                 TimestampType.NO_TIMESTAMP_TYPE,
                 0,
                 0,
-                0,
                 null,
-                null),
+                null,
+                new RecordHeaders(),
+                Optional.empty()),
             0
         );
 
-        assertThat(timestamp, is(metadataTimestamp));
+        assertEquals(metadataTimestamp, timestamp);
     }
 
 }

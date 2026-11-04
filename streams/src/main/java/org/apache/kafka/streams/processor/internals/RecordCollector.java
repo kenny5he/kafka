@@ -17,6 +17,7 @@
 package org.apache.kafka.streams.processor.internals;
 
 import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.Serializer;
@@ -33,7 +34,9 @@ public interface RecordCollector {
                      final Integer partition,
                      final Long timestamp,
                      final Serializer<K> keySerializer,
-                     final Serializer<V> valueSerializer);
+                     final Serializer<V> valueSerializer,
+                     final String processorNodeId,
+                     final InternalProcessorContext<Void, Void> context);
 
     <K, V> void send(final String topic,
                      final K key,
@@ -42,7 +45,15 @@ public interface RecordCollector {
                      final Long timestamp,
                      final Serializer<K> keySerializer,
                      final Serializer<V> valueSerializer,
+                     final String processorNodeId,
+                     final InternalProcessorContext<Void, Void> context,
                      final StreamPartitioner<? super K, ? super V> partitioner);
+
+    <K, V> void send(K key,
+                     V value,
+                     String processorNodeId,
+                     InternalProcessorContext<?, ?> context,
+                     ProducerRecord<byte[], byte[]> serializedRecord);
 
     /**
      * Initialize the internal {@link Producer}; note this function should be made idempotent
@@ -57,9 +68,14 @@ public interface RecordCollector {
     void flush();
 
     /**
-     * Close the internal {@link Producer}.
+     * Clean close the internal {@link Producer}.
      */
-    void close();
+    void closeClean();
+
+    /**
+     * Dirty close the internal {@link Producer}.
+     */
+    void closeDirty();
 
     /**
      * The last acked offsets from the internal {@link Producer}.

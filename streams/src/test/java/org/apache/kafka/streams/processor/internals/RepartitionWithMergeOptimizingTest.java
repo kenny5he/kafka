@@ -17,8 +17,6 @@
 
 package org.apache.kafka.streams.processor.internals;
 
-import java.util.HashMap;
-import java.util.Map;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.LongDeserializer;
 import org.apache.kafka.common.serialization.Serdes;
@@ -32,6 +30,7 @@ import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.TopologyTestDriverBuilder;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Grouped;
 import org.apache.kafka.streams.kstream.KStream;
@@ -41,26 +40,20 @@ import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.state.Stores;
 import org.apache.kafka.test.StreamsTestUtils;
 
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class RepartitionWithMergeOptimizingTest {
-
-    private final Logger log = LoggerFactory.getLogger(RepartitionWithMergeOptimizingTest.class);
 
     private static final String INPUT_A_TOPIC = "inputA";
     private static final String INPUT_B_TOPIC = "inputB";
@@ -78,33 +71,19 @@ public class RepartitionWithMergeOptimizingTest {
     private Properties streamsConfiguration;
     private TopologyTestDriver topologyTestDriver;
 
-    private final List<KeyValue<String, Long>> expectedCountKeyValues =
-        Arrays.asList(KeyValue.pair("A", 6L), KeyValue.pair("B", 6L), KeyValue.pair("C", 6L));
-    private final List<KeyValue<String, String>> expectedStringCountKeyValues =
-        Arrays.asList(KeyValue.pair("A", "6"), KeyValue.pair("B", "6"), KeyValue.pair("C", "6"));
+    private final Map<String, Long> expectedCountKeyValues = Map.of("A", 6L, "B", 6L, "C", 6L);
+    private final Map<String, String> expectedStringCountKeyValues = Map.of("A", "6", "B", "6", "C", "6");
 
-    @Before
+    @BeforeEach
     public void setUp() {
-        final Properties props = new Properties();
-        props.put(StreamsConfig.CACHE_MAX_BYTES_BUFFERING_CONFIG, 1024 * 10);
-        props.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 5000);
-
-        streamsConfiguration = StreamsTestUtils.getStreamsConfig(
-            "maybe-optimized-with-merge-test-app",
-            "dummy-bootstrap-servers-config",
-            Serdes.String().getClass().getName(),
-            Serdes.String().getClass().getName(),
-            props);
+        streamsConfiguration = StreamsTestUtils.getStreamsConfig(Serdes.String(), Serdes.String());
+        streamsConfiguration.setProperty(StreamsConfig.STATESTORE_CACHE_MAX_BYTES_CONFIG, Integer.toString(1024 * 10));
+        streamsConfiguration.setProperty(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, Long.toString(5000));
     }
 
-    @After
+    @AfterEach
     public void tearDown() {
-        try {
-            topologyTestDriver.close();
-        } catch (final RuntimeException e) {
-            log.warn("The following exception was thrown while trying to close the TopologyTestDriver (note that " +
-                "KAFKA-6647 causes this when running on Windows):", e);
-        }
+        topologyTestDriver.close();
     }
 
     @Test
@@ -120,7 +99,7 @@ public class RepartitionWithMergeOptimizingTest {
 
     private void runTest(final String optimizationConfig, final int expectedNumberRepartitionTopics) {
 
-        streamsConfiguration.setProperty(StreamsConfig.TOPOLOGY_OPTIMIZATION, optimizationConfig);
+        streamsConfiguration.setProperty(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, optimizationConfig);
 
         final StreamsBuilder builder = new StreamsBuilder();
 
@@ -152,7 +131,7 @@ public class RepartitionWithMergeOptimizingTest {
 
         final Topology topology = builder.build(streamsConfiguration);
 
-        topologyTestDriver = new TopologyTestDriver(topology, streamsConfiguration);
+        topologyTestDriver = new TopologyTestDriverBuilder(topology).withConfig(streamsConfiguration).build();
 
         final TestInputTopic<String, String> inputTopicA = topologyTestDriver.createInputTopic(INPUT_A_TOPIC, stringSerializer, stringSerializer);
         final TestInputTopic<String, String> inputTopicB = topologyTestDriver.createInputTopic(INPUT_B_TOPIC, stringSerializer, stringSerializer);
@@ -176,16 +155,8 @@ public class RepartitionWithMergeOptimizingTest {
         assertEquals(expectedNumberRepartitionTopics, getCountOfRepartitionTopicsFound(topologyString));
 
         // Verify the expected output
-        assertThat(countOutputTopic.readKeyValuesToMap(), equalTo(keyValueListToMap(expectedCountKeyValues)));
-        assertThat(stringCountOutputTopic.readKeyValuesToMap(), equalTo(keyValueListToMap(expectedStringCountKeyValues)));
-    }
-
-    private <K, V> Map<K, V> keyValueListToMap(final List<KeyValue<K, V>> keyValuePairs) {
-        final Map<K, V> map = new HashMap<>();
-        for (final KeyValue<K, V> pair : keyValuePairs) {
-            map.put(pair.key, pair.value);
-        }
-        return map;
+        assertEquals(expectedCountKeyValues, countOutputTopic.readKeyValuesToMap());
+        assertEquals(expectedStringCountKeyValues, stringCountOutputTopic.readKeyValuesToMap());
     }
 
     private int getCountOfRepartitionTopicsFound(final String topologyString) {

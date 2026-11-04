@@ -17,25 +17,26 @@
 package org.apache.kafka.common.utils;
 
 import org.apache.kafka.common.errors.TimeoutException;
-import org.junit.Test;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-public abstract class TimeTest {
+@Timeout(120)
+public class TimeTest {
 
-    protected abstract Time createTime();
+    private final Time time = Time.SYSTEM;
 
     @Test
     public void testWaitObjectTimeout() throws InterruptedException {
         Object obj = new Object();
-        Time time = createTime();
-        long timeoutMs = 100;
-        long deadlineMs = time.milliseconds() + timeoutMs;
+        long deadlineMs = time.milliseconds() + 100;
         AtomicReference<Exception> caughtException = new AtomicReference<>();
         Thread t = new Thread(() -> {
             try {
@@ -46,7 +47,6 @@ public abstract class TimeTest {
         });
 
         t.start();
-        time.sleep(timeoutMs);
         t.join();
 
         assertEquals(TimeoutException.class, caughtException.get().getClass());
@@ -55,9 +55,7 @@ public abstract class TimeTest {
     @Test
     public void testWaitObjectConditionSatisfied() throws InterruptedException {
         Object obj = new Object();
-        Time time = createTime();
-        long timeoutMs = 1000000000;
-        long deadlineMs = time.milliseconds() + timeoutMs;
+        long deadlineMs = time.milliseconds() + 1000000000;
         AtomicBoolean condition = new AtomicBoolean(false);
         AtomicReference<Exception> caughtException = new AtomicReference<>();
         Thread t = new Thread(() -> {

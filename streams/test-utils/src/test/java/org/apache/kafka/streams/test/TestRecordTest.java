@@ -23,16 +23,18 @@ import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.record.TimestampType;
-import org.junit.Test;
+
+import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.Optional;
 
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.allOf;
-import static org.hamcrest.Matchers.hasProperty;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class TestRecordTest {
     private final String key = "testKey";
@@ -40,7 +42,7 @@ public class TestRecordTest {
     private final Headers headers = new RecordHeaders(
             new Header[]{
                 new RecordHeader("foo", "value".getBytes()),
-                new RecordHeader("bar", (byte[]) null),
+                new RecordHeader("bar", null),
                 new RecordHeader("\"A\\u00ea\\u00f1\\u00fcC\"", "value".getBytes())
             });
     private final Instant recordTime = Instant.parse("2019-06-01T10:00:00Z");
@@ -49,35 +51,32 @@ public class TestRecordTest {
     @Test
     public void testFields() {
         final TestRecord<String, Integer> testRecord = new TestRecord<>(key, value, headers, recordTime);
-        assertThat(testRecord.key(), equalTo(key));
-        assertThat(testRecord.value(), equalTo(value));
-        assertThat(testRecord.headers(), equalTo(headers));
-        assertThat(testRecord.timestamp(), equalTo(recordMs));
+        assertEquals(key, testRecord.key());
+        assertEquals(value, testRecord.value());
+        assertEquals(headers, testRecord.headers());
+        assertEquals(recordMs, testRecord.timestamp());
 
-        assertThat(testRecord.getKey(), equalTo(key));
-        assertThat(testRecord.getValue(), equalTo(value));
-        assertThat(testRecord.getHeaders(), equalTo(headers));
-        assertThat(testRecord.getRecordTime(), equalTo(recordTime));
+        assertEquals(key, testRecord.getKey());
+        assertEquals(value, testRecord.getValue());
+        assertEquals(headers, testRecord.getHeaders());
+        assertEquals(recordTime, testRecord.getRecordTime());
     }
 
     @Test
     public void testMultiFieldMatcher() {
         final TestRecord<String, Integer> testRecord = new TestRecord<>(key, value, headers, recordTime);
 
-        assertThat(testRecord, allOf(
-                hasProperty("key", equalTo(key)),
-                hasProperty("value", equalTo(value)),
-                hasProperty("headers", equalTo(headers))));
+        assertEquals(key, testRecord.getKey());
+        assertEquals(value, testRecord.getValue());
+        assertEquals(headers, testRecord.getHeaders());
 
-        assertThat(testRecord, allOf(
-                hasProperty("key", equalTo(key)),
-                hasProperty("value", equalTo(value)),
-                hasProperty("headers", equalTo(headers)),
-                hasProperty("recordTime", equalTo(recordTime))));
+        assertEquals(key, testRecord.getKey());
+        assertEquals(value, testRecord.getValue());
+        assertEquals(headers, testRecord.getHeaders());
+        assertEquals(recordTime, testRecord.getRecordTime());
 
-        assertThat(testRecord, allOf(
-                hasProperty("key", equalTo(key)),
-                hasProperty("value", equalTo(value))));
+        assertEquals(key, testRecord.getKey());
+        assertEquals(value, testRecord.getValue());
     }
 
 
@@ -98,7 +97,7 @@ public class TestRecordTest {
         final Headers headers2 = new RecordHeaders(
                 new Header[]{
                     new RecordHeader("foo", "value".getBytes()),
-                    new RecordHeader("bar", (byte[]) null),
+                    new RecordHeader("bar", null),
                 });
         final TestRecord<String, Integer> headerMismatch = new TestRecord<>(key, value, headers2, recordTime);
         assertNotEquals(testRecord, headerMismatch);
@@ -120,40 +119,62 @@ public class TestRecordTest {
     @Test
     public void testPartialConstructorEquals() {
         final TestRecord<String, Integer> record1 = new TestRecord<>(value);
-        assertThat(record1, equalTo(new TestRecord<>(null, value, null, (Instant) null)));
+        assertEquals(new TestRecord<>(null, value, null, (Instant) null), record1);
 
         final TestRecord<String, Integer> record2 = new TestRecord<>(key, value);
-        assertThat(record2, equalTo(new TestRecord<>(key, value, null, (Instant) null)));
+        assertEquals(new TestRecord<>(key, value, null, (Instant) null), record2);
 
         final TestRecord<String, Integer> record3 = new TestRecord<>(key, value, headers);
-        assertThat(record3, equalTo(new TestRecord<>(key, value, headers, (Long) null)));
+        assertEquals(new TestRecord<>(key, value, headers, (Long) null), record3);
 
         final TestRecord<String, Integer> record4 = new TestRecord<>(key, value, recordTime);
-        assertThat(record4, equalTo(new TestRecord<>(key, value, null, recordMs)));
+        assertEquals(new TestRecord<>(key, value, null, recordMs), record4);
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testInvalidRecords() {
-        new TestRecord<>(key, value, headers,  -1L);
+        assertThrows(IllegalArgumentException.class,
+            () -> new TestRecord<>(key, value, headers,  -1L));
     }
 
     @Test
     public void testToString() {
         final TestRecord<String, Integer> testRecord = new TestRecord<>(key, value, headers, recordTime);
-        assertThat(testRecord.toString(), equalTo("TestRecord[key=testKey, value=1, "
+        assertEquals("TestRecord[key=testKey, value=1, "
                 + "headers=RecordHeaders(headers = [RecordHeader(key = foo, value = [118, 97, 108, 117, 101]), "
                 + "RecordHeader(key = bar, value = null), RecordHeader(key = \"A\\u00ea\\u00f1\\u00fcC\", value = [118, 97, 108, 117, 101])], isReadOnly = false), "
-                + "recordTime=2019-06-01T10:00:00Z]"));
+                + "recordTime=2019-06-01T10:00:00Z, partition=-1]", testRecord.toString());
     }
 
     @Test
     public void testConsumerRecord() {
         final String topicName = "topic";
-        final ConsumerRecord<String, Integer> consumerRecord =
-            new ConsumerRecord<>(topicName, 1, 0, recordMs, TimestampType.CREATE_TIME, 0L, 0, 0, key, value, headers);
+        final ConsumerRecord<String, Integer> consumerRecord = new ConsumerRecord<>(topicName, 1, 0, recordMs,
+            TimestampType.CREATE_TIME, 0, 0, key, value, headers, Optional.empty());
         final TestRecord<String, Integer> testRecord = new TestRecord<>(consumerRecord);
-        final TestRecord<String, Integer> expectedRecord = new TestRecord<>(key, value, headers, recordTime);
+        final TestRecord<String, Integer> expectedRecord = new TestRecord<>(key, value, headers, recordTime, 1);
         assertEquals(expectedRecord, testRecord);
+    }
+
+    @Test
+    public void testConsumerRecordWithNegativePartition() {
+        final String topicName = "topic";
+        final ConsumerRecord<String, Integer> consumerRecord = new ConsumerRecord<>(topicName, -1, 0, recordMs,
+            TimestampType.CREATE_TIME, 0, 0, key, value, headers, Optional.empty());
+        final IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> new TestRecord<>(consumerRecord));
+        assertEquals("Invalid partition: -1. Partition number should always be non-negative.",
+            exception.getMessage());
+    }
+
+    @Test
+    public void testConsumerRecordWithNoTimestamp() {
+        final String topicName = "topic";
+        final ConsumerRecord<String, String> record = new ConsumerRecord<>(
+                topicName, 0, 0L, ConsumerRecord.NO_TIMESTAMP, TimestampType.NO_TIMESTAMP_TYPE,
+                0, 0, "key", "value", new RecordHeaders(), Optional.empty()
+        );
+        final TestRecord<String, String> testRecord = new TestRecord<>(record);
+        assertNull(testRecord.timestamp());
     }
 
     @Test
@@ -162,8 +183,105 @@ public class TestRecordTest {
         final ProducerRecord<String, Integer> producerRecord =
             new ProducerRecord<>(topicName, 1, recordMs, key, value, headers);
         final TestRecord<String, Integer> testRecord = new TestRecord<>(producerRecord);
-        final TestRecord<String, Integer> expectedRecord = new TestRecord<>(key, value, headers, recordTime);
+        final TestRecord<String, Integer> expectedRecord = new TestRecord<>(key, value, headers, recordTime, 1);
         assertEquals(expectedRecord, testRecord);
-        assertNotEquals(expectedRecord, producerRecord);
+    }
+
+    @Test
+    public void testProducerRecordWithNullTimestamp() {
+        final String topicName = "topic";
+        final ProducerRecord<String, String> record = new ProducerRecord<>(
+            topicName, null, null, "key", "value", new RecordHeaders()
+        );
+        final TestRecord<String, String> testRecord = new TestRecord<>(record);
+        assertNull(testRecord.timestamp());
+    }
+
+    @Test
+    public void testProducerRecordWithoutPartition() {
+        final String topicName = "topic";
+        final ProducerRecord<String, Integer> producerRecord =
+            new ProducerRecord<>(topicName, null, recordMs, key, value, headers);
+        final TestRecord<String, Integer> testRecord = new TestRecord<>(producerRecord);
+        assertEquals(-1, testRecord.partition());
+    }
+
+    @Test
+    public void testPartitionDefaultsToUnset() {
+        // Records built without an explicit partition, default to -1
+        assertEquals(-1, new TestRecord<>(key, value, headers, recordTime).partition());
+        assertEquals(-1, new TestRecord<>(key, value, headers, recordMs).partition());
+        assertEquals(-1, new TestRecord<>(key, value, headers).partition());
+        assertEquals(-1, new TestRecord<>(key, value).partition());
+        assertEquals(-1, new TestRecord<>(value).partition());
+    }
+
+    @Test
+    public void testExplicitPartitionConstructor() {
+        // Records built with an explicit partition.
+        final TestRecord<String, Integer> testRecord = new TestRecord<>(key, value, headers, recordTime, 3);
+        assertEquals(3, testRecord.partition());
+    }
+
+    @Test
+    public void testExplicitNoPartitionConstructor() {
+        // Records built with the NO_PARTITION sentinel.
+        final TestRecord<String, Integer> testRecord =
+            new TestRecord<>(key, value, headers, recordTime, -1);
+        assertEquals(-1, testRecord.partition());
+    }
+
+    @Test
+    public void testInvalidNegativePartitionConstructor() {
+        final IllegalArgumentException exception = assertThrows(
+            IllegalArgumentException.class,
+            () -> new TestRecord<>(key, value, headers, recordTime, -2)
+        );
+        assertEquals(
+            "Invalid partition: -2. Partition number should always be non-negative or -1.",
+            exception.getMessage()
+        );
+    }
+
+    @Test
+    public void testEqualsConsidersPartition() {
+        // equals()/hashCode() take the partition into account.
+        final TestRecord<String, Integer> record1 = new TestRecord<>(key, value, headers, recordTime, 0);
+        final TestRecord<String, Integer> record2 = new TestRecord<>(key, value, headers, recordTime, 1);
+        assertNotEquals(record1, record2);
+
+        final TestRecord<String, Integer> record1Again = new TestRecord<>(key, value, headers, recordTime, 0);
+        assertEquals(record1, record1Again);
+        assertEquals(record1.hashCode(), record1Again.hashCode());
+
+        // an unset (default) partition differs from an explicit one
+        assertNotEquals(new TestRecord<>(key, value, headers, recordTime), record1);
+    }
+
+    @Test
+    public void testEqualsIgnorePartition() {
+        // equalsIgnorePartition() matches on every field except the partition.
+        final TestRecord<String, Integer> record1 = new TestRecord<>(key, value, headers, recordTime, 0);
+        final TestRecord<String, Integer> record2 = new TestRecord<>(key, value, headers, recordTime, 1);
+        assertNotEquals(record1, record2);
+        assertTrue(record1.equalsIgnorePartition(record2));
+        assertTrue(record2.equalsIgnorePartition(record1));
+
+        // a genuine field mismatch is still detected
+        assertFalse(record1.equalsIgnorePartition(new TestRecord<>("other", value, headers, recordTime, 0)));
+        assertFalse(record1.equalsIgnorePartition(new TestRecord<>(key, 2, headers, recordTime, 0)));
+
+        // reflexive / null guards
+        assertTrue(record1.equalsIgnorePartition(record1));
+        assertFalse(record1.equalsIgnorePartition(null));
+    }
+
+    @Test
+    public void testToStringIncludesPartitionWhenSet() {
+        final TestRecord<String, Integer> testRecord = new TestRecord<>(key, value, headers, recordTime, 2);
+        assertEquals("TestRecord[key=testKey, value=1, "
+            + "headers=RecordHeaders(headers = [RecordHeader(key = foo, value = [118, 97, 108, 117, 101]), "
+            + "RecordHeader(key = bar, value = null), RecordHeader(key = \"A\\u00ea\\u00f1\\u00fcC\", value = [118, 97, 108, 117, 101])], isReadOnly = false), "
+            + "recordTime=2019-06-01T10:00:00Z, partition=2]", testRecord.toString());
     }
 }

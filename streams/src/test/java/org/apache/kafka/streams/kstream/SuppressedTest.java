@@ -20,7 +20,10 @@ import org.apache.kafka.streams.kstream.internals.suppress.EagerBufferConfigImpl
 import org.apache.kafka.streams.kstream.internals.suppress.FinalResultsSuppressionBuilder;
 import org.apache.kafka.streams.kstream.internals.suppress.StrictBufferConfigImpl;
 import org.apache.kafka.streams.kstream.internals.suppress.SuppressedInternal;
-import org.junit.Test;
+
+import org.junit.jupiter.api.Test;
+
+import java.util.Map;
 
 import static java.lang.Long.MAX_VALUE;
 import static java.time.Duration.ofMillis;
@@ -30,106 +33,178 @@ import static org.apache.kafka.streams.kstream.Suppressed.BufferConfig.unbounded
 import static org.apache.kafka.streams.kstream.Suppressed.untilTimeLimit;
 import static org.apache.kafka.streams.kstream.Suppressed.untilWindowCloses;
 import static org.apache.kafka.streams.kstream.internals.suppress.BufferFullStrategy.SHUT_DOWN;
-import static org.hamcrest.CoreMatchers.is;
-import static org.hamcrest.MatcherAssert.assertThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class SuppressedTest {
 
     @Test
     public void bufferBuilderShouldBeConsistent() {
-        assertThat(
-            "noBound should remove bounds",
+        assertEquals(
+            unbounded(),
             maxBytes(2L).withMaxRecords(4L).withNoBound(),
-            is(unbounded())
+            "noBound should remove bounds"
         );
 
-        assertThat(
-            "keys alone should be set",
+        assertEquals(
+            new EagerBufferConfigImpl(2L, MAX_VALUE, Map.of()),
             maxRecords(2L),
-            is(new EagerBufferConfigImpl(2L, MAX_VALUE))
+            "keys alone should be set"
         );
 
-        assertThat(
-            "size alone should be set",
+        assertEquals(
+            new EagerBufferConfigImpl(MAX_VALUE, 2L, Map.of()),
             maxBytes(2L),
-            is(new EagerBufferConfigImpl(MAX_VALUE, 2L))
+            "size alone should be set"
+        );
+
+        assertEquals(
+            new EagerBufferConfigImpl(2L, 4L, Map.of("myConfigKey", "myConfigValue")),
+            maxRecords(2L).withMaxBytes(4L).withLoggingEnabled(Map.of("myConfigKey", "myConfigValue")),
+            "config should be set even after max records"
         );
     }
 
     @Test
     public void intermediateEventsShouldAcceptAnyBufferAndSetBounds() {
-        assertThat(
-            "name should be set",
+        assertEquals(
+            new SuppressedInternal<>("myname", ofMillis(2), unbounded(), null, false),
             untilTimeLimit(ofMillis(2), unbounded()).withName("myname"),
-            is(new SuppressedInternal<>("myname", ofMillis(2), unbounded(), null, false))
+            "name should be set"
         );
 
-        assertThat(
-            "time alone should be set",
+        assertEquals(
+            new SuppressedInternal<>(null, ofMillis(2), unbounded(), null, false),
             untilTimeLimit(ofMillis(2), unbounded()),
-            is(new SuppressedInternal<>(null, ofMillis(2), unbounded(), null, false))
+            "time alone should be set"
         );
 
-        assertThat(
-            "time and unbounded buffer should be set",
+        assertEquals(
+            new SuppressedInternal<>(null, ofMillis(2), unbounded(), null, false),
             untilTimeLimit(ofMillis(2), unbounded()),
-            is(new SuppressedInternal<>(null, ofMillis(2), unbounded(), null, false))
+            "time and unbounded buffer should be set"
         );
 
-        assertThat(
-            "time and keys buffer should be set",
+        assertEquals(
+            new SuppressedInternal<>(null, ofMillis(2), maxRecords(2), null, false),
             untilTimeLimit(ofMillis(2), maxRecords(2)),
-            is(new SuppressedInternal<>(null, ofMillis(2), maxRecords(2), null, false))
+            "time and keys buffer should be set"
         );
 
-        assertThat(
-            "time and size buffer should be set",
+        assertEquals(
+            new SuppressedInternal<>(null, ofMillis(2), maxBytes(2), null, false),
             untilTimeLimit(ofMillis(2), maxBytes(2)),
-            is(new SuppressedInternal<>(null, ofMillis(2), maxBytes(2), null, false))
+            "time and size buffer should be set"
         );
 
-        assertThat(
-            "all constraints should be set",
+        assertEquals(
+            new SuppressedInternal<>(null, ofMillis(2), new EagerBufferConfigImpl(3L, 2L, Map.of()), null, false),
             untilTimeLimit(ofMillis(2L), maxRecords(3L).withMaxBytes(2L)),
-            is(new SuppressedInternal<>(null, ofMillis(2), new EagerBufferConfigImpl(3L, 2L), null, false))
+            "all constraints should be set"
+        );
+
+        assertEquals(
+            new SuppressedInternal<>(null, ofMillis(2), new EagerBufferConfigImpl(2L, MAX_VALUE, Map.of("myConfigKey", "myConfigValue")), null, false),
+            untilTimeLimit(ofMillis(2), maxRecords(2L).withLoggingEnabled(Map.of("myConfigKey", "myConfigValue")).emitEarlyWhenFull()),
+            "config is not lost early emit is set"
         );
     }
 
     @Test
     public void finalEventsShouldAcceptStrictBuffersAndSetBounds() {
 
-        assertThat(
-            untilWindowCloses(unbounded()),
-            is(new FinalResultsSuppressionBuilder<>(null, unbounded()))
+        assertEquals(
+            new FinalResultsSuppressionBuilder<>(null, unbounded()),
+            untilWindowCloses(unbounded())
         );
 
-        assertThat(
-            untilWindowCloses(maxRecords(2L).shutDownWhenFull()),
-            is(new FinalResultsSuppressionBuilder<>(null, new StrictBufferConfigImpl(2L, MAX_VALUE, SHUT_DOWN))
-            )
+        assertEquals(
+            new FinalResultsSuppressionBuilder<>(null, new StrictBufferConfigImpl(2L, MAX_VALUE, SHUT_DOWN, Map.of())),
+            untilWindowCloses(maxRecords(2L).shutDownWhenFull())
         );
 
-        assertThat(
-            untilWindowCloses(maxBytes(2L).shutDownWhenFull()),
-            is(new FinalResultsSuppressionBuilder<>(null, new StrictBufferConfigImpl(MAX_VALUE, 2L, SHUT_DOWN))
-            )
+        assertEquals(
+            new FinalResultsSuppressionBuilder<>(null, new StrictBufferConfigImpl(MAX_VALUE, 2L, SHUT_DOWN, Map.of())),
+            untilWindowCloses(maxBytes(2L).shutDownWhenFull())
         );
 
-        assertThat(
-            untilWindowCloses(unbounded()).withName("name"),
-            is(new FinalResultsSuppressionBuilder<>("name", unbounded()))
+        assertEquals(
+            new FinalResultsSuppressionBuilder<>("name", unbounded()),
+            untilWindowCloses(unbounded()).withName("name")
         );
 
-        assertThat(
-            untilWindowCloses(maxRecords(2L).shutDownWhenFull()).withName("name"),
-            is(new FinalResultsSuppressionBuilder<>("name", new StrictBufferConfigImpl(2L, MAX_VALUE, SHUT_DOWN))
-            )
+        assertEquals(
+            new FinalResultsSuppressionBuilder<>("name", new StrictBufferConfigImpl(2L, MAX_VALUE, SHUT_DOWN, Map.of())),
+            untilWindowCloses(maxRecords(2L).shutDownWhenFull()).withName("name")
         );
 
-        assertThat(
-            untilWindowCloses(maxBytes(2L).shutDownWhenFull()).withName("name"),
-            is(new FinalResultsSuppressionBuilder<>("name", new StrictBufferConfigImpl(MAX_VALUE, 2L, SHUT_DOWN))
-            )
+        assertEquals(
+            new FinalResultsSuppressionBuilder<>("name", new StrictBufferConfigImpl(MAX_VALUE, 2L, SHUT_DOWN, Map.of())),
+            untilWindowCloses(maxBytes(2L).shutDownWhenFull()).withName("name")
+        );
+
+        assertEquals(
+            new FinalResultsSuppressionBuilder<>(null, new StrictBufferConfigImpl(MAX_VALUE, 2L, SHUT_DOWN, Map.of("myConfigKey", "myConfigValue"))),
+            untilWindowCloses(maxBytes(2L).withLoggingEnabled(Map.of("myConfigKey", "myConfigValue")).shutDownWhenFull()),
+            "config is not lost when shutdown when full is set"
+        );
+    }
+
+    @Test
+    public void supportLongChainOfMethods() {
+        final Suppressed.BufferConfig<Suppressed.EagerBufferConfig> bufferConfig = unbounded()
+            .emitEarlyWhenFull()
+            .withMaxRecords(3L)
+            .withMaxBytes(4L)
+            .withMaxRecords(5L)
+            .withMaxBytes(6L);
+
+        assertEquals(
+            new EagerBufferConfigImpl(5L, 6L, Map.of()),
+            bufferConfig,
+            "long chain of eager buffer config sets attributes properly"
+        );
+        assertEquals(
+            new StrictBufferConfigImpl(5L, 6L, SHUT_DOWN, Map.of()),
+            bufferConfig.shutDownWhenFull(),
+            "long chain of strict buffer config sets attributes properly"
+        );
+
+        final Suppressed.BufferConfig<Suppressed.EagerBufferConfig> bufferConfigWithLogging = unbounded()
+            .withLoggingEnabled(Map.of("myConfigKey", "myConfigValue"))
+            .emitEarlyWhenFull()
+            .withMaxRecords(3L)
+            .withMaxBytes(4L)
+            .withMaxRecords(5L)
+            .withMaxBytes(6L);
+
+        assertEquals(
+            new EagerBufferConfigImpl(5L, 6L, Map.of("myConfigKey", "myConfigValue")),
+            bufferConfigWithLogging,
+            "long chain of eager buffer config sets attributes properly with logging enabled"
+        );
+        assertEquals(
+            new StrictBufferConfigImpl(5L, 6L, SHUT_DOWN, Map.of("myConfigKey", "myConfigValue")),
+            bufferConfigWithLogging.shutDownWhenFull(),
+            "long chain of strict buffer config sets attributes properly with logging enabled"
+        );
+
+        final Suppressed.BufferConfig<Suppressed.EagerBufferConfig> bufferConfigWithLoggingCalledAtTheEnd = unbounded()
+            .emitEarlyWhenFull()
+            .withMaxRecords(3L)
+            .withMaxBytes(4L)
+            .withMaxRecords(5L)
+            .withMaxBytes(6L)
+            .withLoggingEnabled(Map.of("myConfigKey", "myConfigValue"));
+
+        assertEquals(
+            new EagerBufferConfigImpl(5L, 6L, Map.of("myConfigKey", "myConfigValue")),
+            bufferConfigWithLoggingCalledAtTheEnd,
+            "long chain of eager buffer config sets logging even after other setters"
+        );
+        assertEquals(
+            new StrictBufferConfigImpl(5L, 6L, SHUT_DOWN, Map.of("myConfigKey", "myConfigValue")),
+            bufferConfigWithLoggingCalledAtTheEnd.shutDownWhenFull(),
+            "long chain of strict buffer config sets logging even after other setters"
         );
     }
 }

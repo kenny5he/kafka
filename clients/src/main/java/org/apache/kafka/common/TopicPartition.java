@@ -14,7 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.kafka.common;
+
+import org.apache.kafka.common.annotation.InterfaceAudience;
 
 import java.io.Serializable;
 import java.util.Objects;
@@ -22,6 +25,7 @@ import java.util.Objects;
 /**
  * A topic name and partition number
  */
+@InterfaceAudience.Public
 public final class TopicPartition implements Serializable {
     private static final long serialVersionUID = -613627415771699627L;
 
@@ -47,8 +51,7 @@ public final class TopicPartition implements Serializable {
         if (hash != 0)
             return hash;
         final int prime = 31;
-        int result = 1;
-        result = prime * result + partition;
+        int result = prime + partition;
         result = prime * result + Objects.hashCode(topic);
         this.hash = result;
         return result;

@@ -16,12 +16,12 @@
  */
 package org.apache.kafka.common.requests;
 
-import org.apache.kafka.common.errors.UnsupportedVersionException;
+import org.apache.kafka.common.internals.UnsupportedProtocolFieldException;
 import org.apache.kafka.common.message.SyncGroupRequestData;
 import org.apache.kafka.common.message.SyncGroupResponseData;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
-import org.apache.kafka.common.protocol.types.Struct;
+import org.apache.kafka.common.protocol.Readable;
 
 import java.nio.ByteBuffer;
 import java.util.HashMap;
@@ -41,8 +41,7 @@ public class SyncGroupRequest extends AbstractRequest {
         @Override
         public SyncGroupRequest build(short version) {
             if (data.groupInstanceId() != null && version < 3) {
-                throw new UnsupportedVersionException("The broker sync group protocol version " +
-                        version + " does not support usage of config group.instance.id.");
+                throw new UnsupportedProtocolFieldException("GroupInstanceId", apiKey().name(), version, 3);
             }
             return new SyncGroupRequest(data, version);
         }
@@ -53,16 +52,11 @@ public class SyncGroupRequest extends AbstractRequest {
         }
     }
 
-    public final SyncGroupRequestData data;
+    private final SyncGroupRequestData data;
 
     public SyncGroupRequest(SyncGroupRequestData data, short version) {
         super(ApiKeys.SYNC_GROUP, version);
         this.data = data;
-    }
-
-    public SyncGroupRequest(Struct struct, short version) {
-        super(ApiKeys.SYNC_GROUP, version);
-        this.data = new SyncGroupRequestData(struct, version);
     }
 
     @Override
@@ -82,7 +76,7 @@ public class SyncGroupRequest extends AbstractRequest {
     }
 
     /**
-     * ProtocolType and ProtocolName are mandatory since version 5. This methods verifies that
+     * ProtocolType and ProtocolName are mandatory since version 5. This method verifies that
      * they are defined for version 5 or higher, or returns true otherwise for older versions.
      */
     public boolean areMandatoryProtocolTypeAndNamePresent() {
@@ -92,12 +86,12 @@ public class SyncGroupRequest extends AbstractRequest {
             return true;
     }
 
-    public static SyncGroupRequest parse(ByteBuffer buffer, short version) {
-        return new SyncGroupRequest(ApiKeys.SYNC_GROUP.parseRequest(version, buffer), version);
+    public static SyncGroupRequest parse(Readable readable, short version) {
+        return new SyncGroupRequest(new SyncGroupRequestData(readable, version), version);
     }
 
     @Override
-    protected Struct toStruct() {
-        return data.toStruct(version());
+    public SyncGroupRequestData data() {
+        return data;
     }
 }

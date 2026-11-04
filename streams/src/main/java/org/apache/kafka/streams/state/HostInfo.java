@@ -16,22 +16,20 @@
  */
 package org.apache.kafka.streams.state;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
+import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.common.utils.Utils;
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.processor.internals.StreamsPartitionAssignor;
+
 import static org.apache.kafka.common.utils.Utils.getHost;
 import static org.apache.kafka.common.utils.Utils.getPort;
-
-import org.apache.kafka.common.config.ConfigException;
-import org.apache.kafka.common.serialization.Serializer;
-import org.apache.kafka.streams.KafkaStreams;
-import org.apache.kafka.streams.processor.StreamPartitioner;
-import org.apache.kafka.streams.processor.internals.StreamsPartitionAssignor;
 
 /**
  * Represents a user defined endpoint in a {@link org.apache.kafka.streams.KafkaStreams} application.
  * Instances of this class can be obtained by calling one of:
- *  {@link KafkaStreams#allMetadata()}
- *  {@link KafkaStreams#allMetadataForStore(String)}
- *  {@link KafkaStreams#metadataForKey(String, Object, StreamPartitioner)}
- *  {@link KafkaStreams#metadataForKey(String, Object, Serializer)}
+ *  {@link KafkaStreams#metadataForAllStreamsClients()}
+ *  {@link KafkaStreams#streamsMetadataForStore(String)}
  *
  *  The HostInfo is constructed during Partition Assignment
  *  see {@link StreamsPartitionAssignor}
@@ -40,6 +38,7 @@ import org.apache.kafka.streams.processor.internals.StreamsPartitionAssignor;
  *  If developers wish to expose an endpoint in their KafkaStreams applications they should provide the above
  *  config.
  */
+@InterfaceAudience.Public
 public class HostInfo {
     private final String host;
     private final int port;
@@ -55,12 +54,25 @@ public class HostInfo {
      * @return a new HostInfo or null if endPoint is null or has no characters
      */
     public static HostInfo buildFromEndpoint(final String endPoint) {
-        if (endPoint == null || endPoint.trim().isEmpty()) {
+        if (Utils.isBlank(endPoint)) {
             return null;
         }
 
         final String host = getHost(endPoint);
-        final Integer port = getPort(endPoint);
+        if (Utils.isBlank(host)) {
+            throw new ConfigException(
+                String.format("Error parsing host address %s. Expected format host:port.", endPoint)
+            );
+        }
+
+        final Integer port;
+        try {
+            port = getPort(endPoint);
+        } catch (final NumberFormatException e) {
+            throw new ConfigException(
+                String.format("Error parsing host address %s. Expected format host:port.", endPoint)
+            );
+        }
 
         if (host == null || port == null) {
             throw new ConfigException(

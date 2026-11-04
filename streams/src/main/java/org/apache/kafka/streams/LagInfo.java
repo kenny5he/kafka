@@ -14,14 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.kafka.streams;
+
+import org.apache.kafka.common.annotation.InterfaceAudience;
 
 import java.util.Objects;
 
 /**
  * Encapsulates information about lag, at a store partition replica (active or standby). This information is constantly changing as the
- * tasks process records and thus, they should be treated as simply instantaenous measure of lag.
+ * tasks process records and thus, they should be treated as simply instantaneous measure of lag.
  */
+@InterfaceAudience.Public
 public class LagInfo {
 
     private final long currentOffsetPosition;
@@ -40,7 +44,7 @@ public class LagInfo {
      * Get the current maximum offset on the store partition's changelog topic, that has been successfully written into
      * the store partition's state store.
      *
-     * @return current consume offset for standby/restoring store partitions & simply endoffset for active store partition replicas
+     * @return current consume offset for standby/restoring store partitions &amp; simply end offset for active store partition replicas
      */
     public long currentOffsetPosition() {
         return this.currentOffsetPosition;

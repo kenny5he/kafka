@@ -18,6 +18,7 @@
 package org.apache.kafka.connect.connector.policy;
 
 import org.apache.kafka.common.config.ConfigValue;
+import org.apache.kafka.common.utils.internals.AppInfoParser;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -27,7 +28,12 @@ import java.util.stream.Collectors;
 public abstract class AbstractConnectorClientConfigOverridePolicy implements ConnectorClientConfigOverridePolicy {
 
     @Override
-    public void close() throws Exception {
+    public String version() {
+        return AppInfoParser.getVersion();
+    }
+
+    @Override
+    public void close() {
 
     }
 
@@ -39,7 +45,7 @@ public abstract class AbstractConnectorClientConfigOverridePolicy implements Con
 
     protected ConfigValue configValue(Map.Entry<String, Object> configEntry) {
         ConfigValue configValue =
-            new ConfigValue(configEntry.getKey(), configEntry.getValue(), new ArrayList<>(), new ArrayList<String>());
+            new ConfigValue(configEntry.getKey(), configEntry.getValue(), new ArrayList<>(), new ArrayList<>());
         validate(configValue);
         return configValue;
     }

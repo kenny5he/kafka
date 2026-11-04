@@ -16,26 +16,29 @@
  */
 package org.apache.kafka.common.protocol.types;
 
-import org.apache.kafka.common.utils.ByteUtils;
-import org.junit.Before;
-import org.junit.Test;
+import org.apache.kafka.common.protocol.MessageUtil;
+import org.apache.kafka.common.utils.internals.ByteUtils;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class ProtocolSerializationTest {
 
     private Schema schema;
     private Struct struct;
 
-    @Before
+    @BeforeEach
     public void setup() {
         this.schema = new Schema(new Field("boolean", Type.BOOLEAN),
                                  new Field("int8", Type.INT8),
@@ -137,9 +140,9 @@ public class ProtocolSerializationTest {
         check(new CompactArrayOf(Type.COMPACT_STRING),
                 new Object[] {"hello", "there", "beautiful"},
                 "COMPACT_ARRAY(COMPACT_STRING)");
-        check(ArrayOf.nullable(Type.STRING), null, "ARRAY(STRING)");
+        check(ArrayOf.nullable(Type.STRING), null, "NULLABLE_ARRAY(STRING)");
         check(CompactArrayOf.nullable(Type.COMPACT_STRING), null,
-                "COMPACT_ARRAY(COMPACT_STRING)");
+                "COMPACT_NULLABLE_ARRAY(COMPACT_STRING)");
     }
 
     @Test
@@ -147,12 +150,19 @@ public class ProtocolSerializationTest {
         for (BoundField f : this.schema.fields()) {
             Object o = this.struct.get(f);
             try {
-                this.struct.set(f, null);
-                this.struct.validate();
-                if (!f.def.type.isNullable())
-                    fail("Should not allow serialization of null value.");
-            } catch (SchemaException e) {
-                assertFalse(f.toString() + " should not be nullable", f.def.type.isNullable());
+                if (f.def.type.isNullable()) {
+                    this.struct.set(f, null);
+                    this.struct.validate();
+                } else {
+                    assertThrows(
+                            SchemaException.class,
+                            () -> {
+                                this.struct.set(f, null);
+                                this.struct.validate();
+                            }, "Should not allow serialization of null value."
+                    );
+                    assertFalse(f.def.type.isNullable(), f + " should not be nullable");
+                }
             } finally {
                 this.struct.set(f, o);
             }
@@ -163,7 +173,7 @@ public class ProtocolSerializationTest {
     public void testDefault() {
         Schema schema = new Schema(new Field("field", Type.INT32, "doc", 42));
         Struct struct = new Struct(schema);
-        assertEquals("Should get the default value", 42, struct.get("field"));
+        assertEquals(42, struct.get("field"), "Should get the default value");
         struct.validate(); // should be valid even with missing value
     }
 
@@ -179,7 +189,7 @@ public class ProtocolSerializationTest {
         // Should use default even if the field allows null values
         Schema schema = new Schema(new Field("field", type, "doc", defaultValue));
         Struct struct = new Struct(schema);
-        assertEquals("Should get the default value", defaultValue, struct.get("field"));
+        assertEquals(defaultValue, struct.get("field"), "Should get the default value");
         struct.validate(); // should be valid even with missing value
     }
 
@@ -192,12 +202,9 @@ public class ProtocolSerializationTest {
         for (int i = 0; i < size; i++)
             invalidBuffer.put((byte) i);
         invalidBuffer.rewind();
-        try {
-            type.read(invalidBuffer);
-            fail("Array size not validated");
-        } catch (SchemaException e) {
-            // Expected exception
-        }
+        assertThrows(SchemaException.class,
+            () -> type.read(invalidBuffer),
+            "Array size not validated");
     }
 
     @Test
@@ -210,12 +217,78 @@ public class ProtocolSerializationTest {
         for (int i = 0; i < size; i++)
             invalidBuffer.put((byte) i);
         invalidBuffer.rewind();
+        assertThrows(SchemaException.class,
+            () -> type.read(invalidBuffer),
+            "Array size not validated");
+    }
+
+    @Test
+    public void testReadArrayLengthAboveMaxIsRejected() {
+        Type type = new ArrayOf(Type.INT8);
+        int count = MessageUtil.MAX_ARRAY_LENGTH + 1;
+        ByteBuffer buffer = ByteBuffer.allocate(4 + count);
+        buffer.putInt(count);
+        buffer.rewind();
+        SchemaException e = assertThrows(SchemaException.class, () -> type.read(buffer));
+        assertEquals("Error reading array of size " + count + ", which exceeds the maximum allowed size of "
+                + MessageUtil.MAX_ARRAY_LENGTH, e.getMessage());
+    }
+
+    @Test
+    public void testReadArrayLengthHonorsConfiguredMax() {
         try {
-            type.read(invalidBuffer);
-            fail("Array size not validated");
-        } catch (SchemaException e) {
-            // Expected exception
+            MessageUtil.setMaxArrayLength(10);
+            for (Type type : new Type[] {new ArrayOf(Type.INT8), new CompactArrayOf(Type.INT8)}) {
+                ByteBuffer accepted = ByteBuffer.allocate(16);
+                type.write(accepted, new Object[] {(byte) 0, (byte) 1, (byte) 2, (byte) 3, (byte) 4,
+                    (byte) 5, (byte) 6, (byte) 7, (byte) 8, (byte) 9});
+                accepted.flip();
+                assertEquals(10, ((Object[]) type.read(accepted)).length);
+
+                ByteBuffer rejected = ByteBuffer.allocate(16);
+                type.write(rejected, new Object[] {(byte) 0, (byte) 1, (byte) 2, (byte) 3, (byte) 4,
+                    (byte) 5, (byte) 6, (byte) 7, (byte) 8, (byte) 9, (byte) 10});
+                rejected.flip();
+                SchemaException e = assertThrows(SchemaException.class, () -> type.read(rejected));
+                assertEquals("Error reading array of size 11, which exceeds the maximum allowed size of 10", e.getMessage());
+            }
+        } finally {
+            MessageUtil.setMaxArrayLength(MessageUtil.MAX_ARRAY_LENGTH);
         }
+    }
+
+    @Test
+    public void testReadCompactArrayLengthAboveMaxIsRejected() {
+        Type type = new CompactArrayOf(Type.INT8);
+        int count = MessageUtil.MAX_ARRAY_LENGTH + 1;
+        ByteBuffer buffer = ByteBuffer.allocate(ByteUtils.sizeOfUnsignedVarint(count + 1) + count);
+        ByteUtils.writeUnsignedVarint(count + 1, buffer);
+        buffer.rewind();
+        SchemaException e = assertThrows(SchemaException.class, () -> type.read(buffer));
+        assertEquals("Error reading array of size " + count + ", which exceeds the maximum allowed size of "
+                + MessageUtil.MAX_ARRAY_LENGTH, e.getMessage());
+    }
+
+    @Test
+    public void testReadTaggedFieldsSizeTooLarge() {
+        int tag = 1;
+        Type type = TaggedFields.of(tag, new Field("field", Type.NULLABLE_STRING));
+        int size = 10;
+        ByteBuffer buffer = ByteBuffer.allocate(size);
+        int numTaggedFields = 1;
+        // write the number of tagged fields
+        ByteUtils.writeUnsignedVarint(numTaggedFields, buffer);
+        // write the tag of the first tagged fields
+        ByteUtils.writeUnsignedVarint(tag, buffer);
+        // write the size of tagged fields for this tag, using a large number for testing
+        ByteUtils.writeUnsignedVarint(Integer.MAX_VALUE, buffer);
+        int expectedRemaining = buffer.remaining();
+        buffer.rewind();
+
+        // should throw SchemaException while reading the buffer, instead of OOM
+        Throwable e = assertThrows(SchemaException.class, () -> type.read(buffer));
+        assertEquals("Error reading field of size " + Integer.MAX_VALUE + ", only " + expectedRemaining + " bytes available",
+            e.getMessage());
     }
 
     @Test
@@ -227,12 +300,9 @@ public class ProtocolSerializationTest {
         for (int i = 0; i < size; i++)
             invalidBuffer.put((byte) i);
         invalidBuffer.rewind();
-        try {
-            type.read(invalidBuffer);
-            fail("Array size not validated");
-        } catch (SchemaException e) {
-            // Expected exception
-        }
+        assertThrows(SchemaException.class,
+            () -> type.read(invalidBuffer),
+            "Array size not validated");
     }
 
     @Test
@@ -245,12 +315,9 @@ public class ProtocolSerializationTest {
         for (int i = 0; i < size; i++)
             invalidBuffer.put((byte) i);
         invalidBuffer.rewind();
-        try {
-            type.read(invalidBuffer);
-            fail("Array size not validated");
-        } catch (SchemaException e) {
-            // Expected exception
-        }
+        assertThrows(SchemaException.class,
+            () -> type.read(invalidBuffer),
+            "Array size not validated");
     }
 
     @Test
@@ -260,19 +327,14 @@ public class ProtocolSerializationTest {
         invalidBuffer.putShort((short) (stringBytes.length * 5));
         invalidBuffer.put(stringBytes);
         invalidBuffer.rewind();
-        try {
-            Type.STRING.read(invalidBuffer);
-            fail("String size not validated");
-        } catch (SchemaException e) {
-            // Expected exception
-        }
+        assertThrows(SchemaException.class,
+            () -> Type.STRING.read(invalidBuffer),
+            "String size not validated");
+
         invalidBuffer.rewind();
-        try {
-            Type.NULLABLE_STRING.read(invalidBuffer);
-            fail("String size not validated");
-        } catch (SchemaException e) {
-            // Expected exception
-        }
+        assertThrows(SchemaException.class,
+            () -> Type.NULLABLE_STRING.read(invalidBuffer),
+            "String size not validated");
     }
 
     @Test
@@ -282,12 +344,10 @@ public class ProtocolSerializationTest {
         invalidBuffer.putShort((short) -1);
         invalidBuffer.put(stringBytes);
         invalidBuffer.rewind();
-        try {
-            Type.STRING.read(invalidBuffer);
-            fail("String size not validated");
-        } catch (SchemaException e) {
-            // Expected exception
-        }
+
+        assertThrows(SchemaException.class,
+            () -> Type.STRING.read(invalidBuffer),
+            "String size not validated");
     }
 
     @Test
@@ -297,19 +357,14 @@ public class ProtocolSerializationTest {
         invalidBuffer.putInt(stringBytes.length * 5);
         invalidBuffer.put(stringBytes);
         invalidBuffer.rewind();
-        try {
-            Type.BYTES.read(invalidBuffer);
-            fail("Bytes size not validated");
-        } catch (SchemaException e) {
-            // Expected exception
-        }
+        assertThrows(SchemaException.class,
+            () -> Type.BYTES.read(invalidBuffer),
+            "Bytes size not validated");
+
         invalidBuffer.rewind();
-        try {
-            Type.NULLABLE_BYTES.read(invalidBuffer);
-            fail("Bytes size not validated");
-        } catch (SchemaException e) {
-            // Expected exception
-        }
+        assertThrows(SchemaException.class,
+            () -> Type.NULLABLE_BYTES.read(invalidBuffer),
+            "Bytes size not validated");
     }
 
     @Test
@@ -319,28 +374,26 @@ public class ProtocolSerializationTest {
         invalidBuffer.putInt(-20);
         invalidBuffer.put(stringBytes);
         invalidBuffer.rewind();
-        try {
-            Type.BYTES.read(invalidBuffer);
-            fail("Bytes size not validated");
-        } catch (SchemaException e) {
-            // Expected exception
-        }
+
+        assertThrows(SchemaException.class,
+            () -> Type.BYTES.read(invalidBuffer),
+            "Bytes size not validated");
     }
 
     @Test
     public void testToString() {
         String structStr = this.struct.toString();
-        assertNotNull("Struct string should not be null.", structStr);
-        assertFalse("Struct string should not be empty.", structStr.isEmpty());
+        assertNotNull(structStr, "Struct string should not be null.");
+        assertFalse(structStr.isEmpty(), "Struct string should not be empty.");
     }
 
     private Object roundtrip(Type type, Object obj) {
         ByteBuffer buffer = ByteBuffer.allocate(type.sizeOf(obj));
         type.write(buffer, obj);
-        assertFalse("The buffer should now be full.", buffer.hasRemaining());
+        assertFalse(buffer.hasRemaining(), "The buffer should now be full.");
         buffer.rewind();
         Object read = type.read(buffer);
-        assertFalse("All bytes should have been read.", buffer.hasRemaining());
+        assertFalse(buffer.hasRemaining(), "All bytes should have been read.");
         return read;
     }
 
@@ -351,7 +404,7 @@ public class ProtocolSerializationTest {
             result = Arrays.asList((Object[]) result);
         }
         assertEquals(expectedTypeName, type.toString());
-        assertEquals("The object read back should be the same as what was written.", obj, result);
+        assertEquals(obj, result, "The object read back should be the same as what was written.");
     }
 
     @Test
@@ -397,7 +450,7 @@ public class ProtocolSerializationTest {
         Struct newFormat = newSchema.read(buffer);
         assertEquals(value, newFormat.get("field1"));
         assertEquals("default", newFormat.get("field2"));
-        assertEquals(null, newFormat.get("field3"));
+        assertNull(newFormat.get("field3"));
         assertEquals(ByteBuffer.allocate(0), newFormat.get("field4"));
         assertEquals(Long.MAX_VALUE, newFormat.get("field5"));
     }
@@ -414,7 +467,7 @@ public class ProtocolSerializationTest {
         oldFormat.writeTo(buffer);
         buffer.flip();
         SchemaException e = assertThrows(SchemaException.class, () -> newSchema.read(buffer));
-        e.getMessage().contains("Error reading field 'field2': java.nio.BufferUnderflowException");
+        assertTrue(e.getMessage().contains("Error reading field 'field2':"));
     }
 
     @Test
@@ -430,6 +483,23 @@ public class ProtocolSerializationTest {
         oldFormat.writeTo(buffer);
         buffer.flip();
         SchemaException e = assertThrows(SchemaException.class, () -> newSchema.read(buffer));
-        e.getMessage().contains("Missing value for field 'field2' which has no default value");
+        assertTrue(e.getMessage().contains("Missing value for field 'field2' which has no default value"));
+    }
+
+    @Test
+    public void testReadBytesBeyondItsSize() {
+        Type[] types = new Type[]{
+            Type.BYTES,
+            Type.COMPACT_BYTES,
+            Type.NULLABLE_BYTES,
+            Type.COMPACT_NULLABLE_BYTES
+        };
+        for (Type type : types) {
+            ByteBuffer buffer = ByteBuffer.allocate(20);
+            type.write(buffer, ByteBuffer.allocate(4));
+            buffer.rewind();
+            ByteBuffer bytes = (ByteBuffer) type.read(buffer);
+            assertThrows(IllegalArgumentException.class, () -> bytes.limit(bytes.limit() + 1));
+        }
     }
 }

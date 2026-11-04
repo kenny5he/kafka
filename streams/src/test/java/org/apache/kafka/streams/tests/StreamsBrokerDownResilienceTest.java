@@ -17,82 +17,68 @@
 
 package org.apache.kafka.streams.tests;
 
-import java.time.Duration;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
-import org.apache.kafka.common.utils.Exit;
 import org.apache.kafka.common.utils.Utils;
-import org.apache.kafka.streams.kstream.Consumed;
+import org.apache.kafka.common.utils.internals.Exit;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
+import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.ForeachAction;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Properties;
 
 public class StreamsBrokerDownResilienceTest {
-
-    private static final int KEY = 0;
-    private static final int VALUE = 1;
 
     private static final String SOURCE_TOPIC_1 = "streamsResilienceSource";
 
     private static final String SINK_TOPIC = "streamsResilienceSink";
 
     public static void main(final String[] args) throws IOException {
-        if (args.length < 2) {
-            System.err.println("StreamsBrokerDownResilienceTest are expecting two parameters: propFile, additionalConfigs; but only see " + args.length + " parameter");
-            System.exit(1);
+        if (args.length < 1) {
+            System.err.println("StreamsBrokerDownResilienceTest is expecting one parameter: propFile; but only see " + args.length + " parameter");
+            Exit.exit(1);
         }
 
         System.out.println("StreamsTest instance started");
 
         final String propFileName = args[0];
-        final String additionalConfigs = args[1];
 
         final Properties streamsProperties = Utils.loadProps(propFileName);
         final String kafka = streamsProperties.getProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG);
 
         if (kafka == null) {
             System.err.println("No bootstrap kafka servers specified in " + StreamsConfig.BOOTSTRAP_SERVERS_CONFIG);
-            System.exit(1);
+            Exit.exit(1);
         }
 
         streamsProperties.put(StreamsConfig.APPLICATION_ID_CONFIG, "kafka-streams-resilience");
         streamsProperties.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         streamsProperties.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
-        streamsProperties.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 100);
-
-
-        // it is expected that max.poll.interval, retries, request.timeout and max.block.ms set
-        // streams_broker_down_resilience_test and passed as args
-        if (additionalConfigs != null && !additionalConfigs.equalsIgnoreCase("none")) {
-            final Map<String, String> updated = updatedConfigs(additionalConfigs);
-            System.out.println("Updating configs with " + updated);
-            streamsProperties.putAll(updated);
-        }
+        streamsProperties.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 100L);
 
         if (!confirmCorrectConfigs(streamsProperties)) {
-            System.err.println(String.format("ERROR: Did not have all required configs expected  to contain %s %s %s %s",
+            System.err.printf("ERROR: Did not have all required configs expected  to contain %s %s %s %s%n",
                                              StreamsConfig.consumerPrefix(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG),
                                              StreamsConfig.producerPrefix(ProducerConfig.RETRIES_CONFIG),
                                              StreamsConfig.producerPrefix(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG),
-                                             StreamsConfig.producerPrefix(ProducerConfig.MAX_BLOCK_MS_CONFIG)));
+                                             StreamsConfig.producerPrefix(ProducerConfig.MAX_BLOCK_MS_CONFIG));
 
-            System.exit(1);
+            Exit.exit(1);
         }
 
         final StreamsBuilder builder = new StreamsBuilder();
         final Serde<String> stringSerde = Serdes.String();
 
         builder.stream(Collections.singletonList(SOURCE_TOPIC_1), Consumed.with(stringSerde, stringSerde))
-            .peek(new ForeachAction<String, String>() {
+            .peek(new ForeachAction<>() {
                 int messagesProcessed = 0;
                 @Override
                 public void apply(final String key, final String value) {
@@ -105,10 +91,10 @@ public class StreamsBrokerDownResilienceTest {
 
         final KafkaStreams streams = new KafkaStreams(builder.build(), streamsProperties);
 
-        streams.setUncaughtExceptionHandler((t, e) -> {
+        streams.setUncaughtExceptionHandler(e -> {
                 System.err.println("FATAL: An unexpected exception " + e);
                 System.err.flush();
-                streams.close(Duration.ofSeconds(30));
+                return StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse.SHUTDOWN_CLIENT;
             }
         );
 
@@ -127,23 +113,6 @@ public class StreamsBrokerDownResilienceTest {
                properties.containsKey(StreamsConfig.producerPrefix(ProducerConfig.RETRIES_CONFIG)) &&
                properties.containsKey(StreamsConfig.producerPrefix(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG)) &&
                properties.containsKey(StreamsConfig.producerPrefix(ProducerConfig.MAX_BLOCK_MS_CONFIG));
-    }
-
-    /**
-     * Takes a string with keys and values separated by '=' and each key value pair
-     * separated by ',' for example max.block.ms=5000,retries=6,request.timeout.ms=6000
-     *
-     * @param formattedConfigs the formatted config string
-     * @return HashMap with keys and values inserted
-     */
-    private static Map<String, String> updatedConfigs(final String formattedConfigs) {
-        final String[] parts = formattedConfigs.split(",");
-        final Map<String, String> updatedConfigs = new HashMap<>();
-        for (final String part : parts) {
-            final String[] keyValue = part.split("=");
-            updatedConfigs.put(keyValue[KEY], keyValue[VALUE]);
-        }
-        return updatedConfigs;
     }
 
 }

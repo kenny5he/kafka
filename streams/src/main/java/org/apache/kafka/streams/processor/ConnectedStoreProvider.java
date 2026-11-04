@@ -16,12 +16,11 @@
  */
 package org.apache.kafka.streams.processor;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.Named;
-import org.apache.kafka.streams.kstream.TransformerSupplier;
-import org.apache.kafka.streams.kstream.ValueTransformerSupplier;
-import org.apache.kafka.streams.kstream.ValueTransformerWithKeySupplier;
+import org.apache.kafka.streams.processor.api.FixedKeyProcessorSupplier;
 import org.apache.kafka.streams.state.StoreBuilder;
 
 import java.util.Set;
@@ -60,7 +59,7 @@ import java.util.Set;
  *         }
  *
  *         Set<StoreBuilder<?>> stores() {
- *             return Collections.singleton(storeBuilder);
+ *             return Set.of(storeBuilder);
  *         }
  *     }
  *
@@ -84,28 +83,19 @@ import java.util.Set;
  *         }
  *
  *         Set<StoreBuilder<?>> stores() {
- *             return Collections.singleton(storeBuilder);
+ *             return Set.of(storeBuilder);
  *         }
  *     }
  * }
  * }</pre>
  *
- * @see Topology#addProcessor(String, ProcessorSupplier, String...)
- * @see KStream#process(ProcessorSupplier, String...)
- * @see KStream#process(ProcessorSupplier, Named, String...)
- * @see KStream#transform(TransformerSupplier, String...)
- * @see KStream#transform(TransformerSupplier, Named, String...)
- * @see KStream#transformValues(ValueTransformerSupplier, String...)
- * @see KStream#transformValues(ValueTransformerSupplier, Named, String...)
- * @see KStream#transformValues(ValueTransformerWithKeySupplier, String...)
- * @see KStream#transformValues(ValueTransformerWithKeySupplier, Named, String...)
- * @see KStream#flatTransform(TransformerSupplier, String...)
- * @see KStream#flatTransform(TransformerSupplier, Named, String...)
- * @see KStream#flatTransformValues(ValueTransformerSupplier, String...)
- * @see KStream#flatTransformValues(ValueTransformerSupplier, Named, String...)
- * @see KStream#flatTransformValues(ValueTransformerWithKeySupplier, String...)
- * @see KStream#flatTransformValues(ValueTransformerWithKeySupplier, Named, String...)
+ * @see Topology#addProcessor(String, org.apache.kafka.streams.processor.api.ProcessorSupplier, String...)
+ * @see KStream#process(org.apache.kafka.streams.processor.api.ProcessorSupplier, String...)
+ * @see KStream#process(org.apache.kafka.streams.processor.api.ProcessorSupplier, Named, String...)
+ * @see KStream#processValues(FixedKeyProcessorSupplier, String...)
+ * @see KStream#processValues(FixedKeyProcessorSupplier, Named, String...)
  */
+@InterfaceAudience.Public
 public interface ConnectedStoreProvider {
 
     /**

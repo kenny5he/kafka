@@ -16,12 +16,16 @@
 {
   "type": "header",
   "name": "RequestHeader",
+  // Version 0 was removed in Apache Kafka 4.0, Version 1 is the new baseline.
+  //
   // Version 0 of the RequestHeader is only used by v0 of ControlledShutdownRequest.
   //
   // Version 1 is the first version with ClientId.
   //
   // Version 2 is the first flexible version.
-  "validVersions": "0-2",
+  //
+  // Version 3 introduces ClientInstanceId. (KIP-1313)
+  "validVersions": "1-3",
   "flexibleVersions": "2+",
   "fields": [
     { "name": "RequestApiKey", "type": "int16", "versions": "0+",
@@ -36,7 +40,9 @@
     // ApiVersionsRequest, even if it is from a newer version.
     // Since the client is sending the ApiVersionsRequest in order to discover what
     // versions are supported, the client does not know the best version to use.
-    { "name": "ClientId", "type": "string", "versions": "1+", "nullableVersions": "1+", "ignorable": true,
-      "flexibleVersions": "none", "about": "The client ID string." }
+    { "name": "ClientId", "type": "string", "versions": "1+", "nullableVersions": "1+", "flexibleVersions": "none",
+      "about": "The client ID, for identifying an application." },
+    { "name": "ClientInstanceId", "type": "uuid", "versions": "3+", "taggedVersions": "3+", "tag": 0,
+      "about": "The client instance ID, for identifying an instance of an application." }
   ]
 }

@@ -17,6 +17,8 @@
 package org.apache.kafka.streams.processor.internals;
 
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.streams.processor.StandbyUpdateListener.SuspendReason;
+import org.apache.kafka.streams.processor.TaskId;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -26,7 +28,7 @@ import java.util.Set;
 
 public class MockChangelogReader implements ChangelogReader {
     private final Set<TopicPartition> restoringPartitions = new HashSet<>();
-    private Map<TopicPartition, Long> restoredOffsets = Collections.emptyMap();
+    private final Map<TopicPartition, Long> restoredOffsets = Collections.emptyMap();
 
     public boolean isPartitionRegistered(final TopicPartition partition) {
         return restoringPartitions.contains(partition);
@@ -38,8 +40,16 @@ public class MockChangelogReader implements ChangelogReader {
     }
 
     @Override
-    public void restore() {
+    public void register(final Set<TopicPartition> changelogPartitions, final ProcessorStateManager stateManager) {
+        for (final TopicPartition changelogPartition : changelogPartitions) {
+            register(changelogPartition, stateManager);
+        }
+    }
+
+    @Override
+    public long restore(final Map<TaskId, Task> tasks) {
         // do nothing
+        return 0L;
     }
 
     @Override
@@ -53,9 +63,24 @@ public class MockChangelogReader implements ChangelogReader {
     }
 
     @Override
+    public boolean isRestoringActive() {
+        return true;
+    }
+
+    @Override
     public Set<TopicPartition> completedChangelogs() {
         // assuming all restoring partitions are completed
         return restoringPartitions;
+    }
+
+    @Override
+    public Map<TopicPartition, Long> logicalChangelogEndOffsets() {
+        return Collections.emptyMap();
+    }
+
+    @Override
+    public boolean allChangelogsCompleted() {
+        return false;
     }
 
     @Override
@@ -70,6 +95,12 @@ public class MockChangelogReader implements ChangelogReader {
         for (final TopicPartition partition : partitions) {
             restoredOffsets.remove(partition);
         }
+    }
+
+    @Override
+    public void unregister(final Collection<TopicPartition> partitions,
+                           final SuspendReason reason) {
+        unregister(partitions);
     }
 
     @Override

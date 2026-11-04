@@ -16,18 +16,19 @@
  */
 package org.apache.kafka.streams.state.internals;
 
+import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.streams.processor.internals.ProcessorRecordContext;
-import org.junit.Test;
+
+import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertSame;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 public class BufferValueTest {
     @Test
@@ -37,7 +38,7 @@ public class BufferValueTest {
     }
 
     @Test
-    public void shouldDeduplicateIndenticalValues() {
+    public void shouldDeduplicateIdenticalValues() {
         final byte[] bytes = {(byte) 0};
         final BufferValue bufferValue = new BufferValue(bytes, bytes, null, null);
         assertSame(bufferValue.priorValue(), bufferValue.oldValue());
@@ -81,7 +82,7 @@ public class BufferValueTest {
 
     @Test
     public void shouldAccountForDeduplicationInSizeEstimate() {
-        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", null);
+        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", new RecordHeaders());
         assertEquals(25L, new BufferValue(null, null, null, context).residentMemorySizeEstimate());
         assertEquals(26L, new BufferValue(new byte[] {(byte) 0}, null, null, context).residentMemorySizeEstimate());
         assertEquals(26L, new BufferValue(null, new byte[] {(byte) 0}, null, context).residentMemorySizeEstimate());
@@ -94,61 +95,61 @@ public class BufferValueTest {
 
     @Test
     public void shouldSerializeNulls() {
-        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", null);
+        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", new RecordHeaders());
         final byte[] serializedContext = context.serialize();
         final byte[] bytes = new BufferValue(null, null, null, context).serialize(0).array();
         final byte[] withoutContext = Arrays.copyOfRange(bytes, serializedContext.length, bytes.length);
 
-        assertThat(withoutContext, is(ByteBuffer.allocate(Integer.BYTES * 3).putInt(-1).putInt(-1).putInt(-1).array()));
+        assertArrayEquals(ByteBuffer.allocate(Integer.BYTES * 3).putInt(-1).putInt(-1).putInt(-1).array(), withoutContext);
     }
 
     @Test
     public void shouldSerializePrior() {
-        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", null);
+        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", new RecordHeaders());
         final byte[] serializedContext = context.serialize();
         final byte[] priorValue = {(byte) 5};
         final byte[] bytes = new BufferValue(priorValue, null, null, context).serialize(0).array();
         final byte[] withoutContext = Arrays.copyOfRange(bytes, serializedContext.length, bytes.length);
 
-        assertThat(withoutContext, is(ByteBuffer.allocate(Integer.BYTES * 3 + 1).putInt(1).put(priorValue).putInt(-1).putInt(-1).array()));
+        assertArrayEquals(ByteBuffer.allocate(Integer.BYTES * 3 + 1).putInt(1).put(priorValue).putInt(-1).putInt(-1).array(), withoutContext);
     }
 
     @Test
     public void shouldSerializeOld() {
-        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", null);
+        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", new RecordHeaders());
         final byte[] serializedContext = context.serialize();
         final byte[] oldValue = {(byte) 5};
         final byte[] bytes = new BufferValue(null, oldValue, null, context).serialize(0).array();
         final byte[] withoutContext = Arrays.copyOfRange(bytes, serializedContext.length, bytes.length);
 
-        assertThat(withoutContext, is(ByteBuffer.allocate(Integer.BYTES * 3 + 1).putInt(-1).putInt(1).put(oldValue).putInt(-1).array()));
+        assertArrayEquals(ByteBuffer.allocate(Integer.BYTES * 3 + 1).putInt(-1).putInt(1).put(oldValue).putInt(-1).array(), withoutContext);
     }
 
     @Test
     public void shouldSerializeNew() {
-        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", null);
+        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", new RecordHeaders());
         final byte[] serializedContext = context.serialize();
         final byte[] newValue = {(byte) 5};
         final byte[] bytes = new BufferValue(null, null, newValue, context).serialize(0).array();
         final byte[] withoutContext = Arrays.copyOfRange(bytes, serializedContext.length, bytes.length);
 
-        assertThat(withoutContext, is(ByteBuffer.allocate(Integer.BYTES * 3 + 1).putInt(-1).putInt(-1).putInt(1).put(newValue).array()));
+        assertArrayEquals(ByteBuffer.allocate(Integer.BYTES * 3 + 1).putInt(-1).putInt(-1).putInt(1).put(newValue).array(), withoutContext);
     }
 
     @Test
     public void shouldCompactDuplicates() {
-        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", null);
+        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", new RecordHeaders());
         final byte[] serializedContext = context.serialize();
         final byte[] duplicate = {(byte) 5};
         final byte[] bytes = new BufferValue(duplicate, duplicate, null, context).serialize(0).array();
         final byte[] withoutContext = Arrays.copyOfRange(bytes, serializedContext.length, bytes.length);
 
-        assertThat(withoutContext, is(ByteBuffer.allocate(Integer.BYTES * 3 + 1).putInt(1).put(duplicate).putInt(-2).putInt(-1).array()));
+        assertArrayEquals(ByteBuffer.allocate(Integer.BYTES * 3 + 1).putInt(1).put(duplicate).putInt(-2).putInt(-1).array(), withoutContext);
     }
 
     @Test
     public void shouldDeserializePrior() {
-        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", null);
+        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", new RecordHeaders());
         final byte[] serializedContext = context.serialize();
         final byte[] priorValue = {(byte) 5};
         final ByteBuffer serialValue =
@@ -158,12 +159,12 @@ public class BufferValueTest {
         serialValue.position(0);
 
         final BufferValue deserialize = BufferValue.deserialize(serialValue);
-        assertThat(deserialize, is(new BufferValue(priorValue, null, null, context)));
+        assertEquals(new BufferValue(priorValue, null, null, context), deserialize);
     }
 
     @Test
     public void shouldDeserializeOld() {
-        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", null);
+        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", new RecordHeaders());
         final byte[] serializedContext = context.serialize();
         final byte[] oldValue = {(byte) 5};
         final ByteBuffer serialValue =
@@ -172,12 +173,12 @@ public class BufferValueTest {
                 .put(serializedContext).putInt(-1).putInt(1).put(oldValue).putInt(-1);
         serialValue.position(0);
 
-        assertThat(BufferValue.deserialize(serialValue), is(new BufferValue(null, oldValue, null, context)));
+        assertEquals(new BufferValue(null, oldValue, null, context), BufferValue.deserialize(serialValue));
     }
 
     @Test
     public void shouldDeserializeNew() {
-        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", null);
+        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", new RecordHeaders());
         final byte[] serializedContext = context.serialize();
         final byte[] newValue = {(byte) 5};
         final ByteBuffer serialValue =
@@ -186,12 +187,12 @@ public class BufferValueTest {
                 .put(serializedContext).putInt(-1).putInt(-1).putInt(1).put(newValue);
         serialValue.position(0);
 
-        assertThat(BufferValue.deserialize(serialValue), is(new BufferValue(null, null, newValue, context)));
+        assertEquals(new BufferValue(null, null, newValue, context), BufferValue.deserialize(serialValue));
     }
 
     @Test
     public void shouldDeserializeCompactedDuplicates() {
-        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", null);
+        final ProcessorRecordContext context = new ProcessorRecordContext(0L, 0L, 0, "topic", new RecordHeaders());
         final byte[] serializedContext = context.serialize();
         final byte[] duplicate = {(byte) 5};
         final ByteBuffer serialValue =
@@ -201,7 +202,7 @@ public class BufferValueTest {
         serialValue.position(0);
 
         final BufferValue bufferValue = BufferValue.deserialize(serialValue);
-        assertThat(bufferValue, is(new BufferValue(duplicate, duplicate, null, context)));
+        assertEquals(new BufferValue(duplicate, duplicate, null, context), bufferValue);
         assertSame(bufferValue.priorValue(), bufferValue.oldValue());
     }
 }

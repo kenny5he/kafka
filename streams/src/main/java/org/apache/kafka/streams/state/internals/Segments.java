@@ -16,9 +16,11 @@
  */
 package org.apache.kafka.streams.state.internals;
 
-import org.apache.kafka.streams.processor.internals.InternalProcessorContext;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.streams.processor.StateStoreContext;
 
 import java.util.List;
+import java.util.Map;
 
 interface Segments<S extends Segment> {
 
@@ -26,19 +28,24 @@ interface Segments<S extends Segment> {
 
     String segmentName(final long segmentId);
 
-    S getSegmentForTimestamp(final long timestamp);
+    S segmentForTimestamp(final long timestamp);
 
-    S getOrCreateSegmentIfLive(final long segmentId, final InternalProcessorContext context, final long streamTime);
+    S getOrCreateSegmentIfLive(final long segmentId, final StateStoreContext context, final long streamTime);
 
-    S getOrCreateSegment(final long segmentId, final InternalProcessorContext context);
+    S getOrCreateSegment(final long segmentId, final StateStoreContext context);
 
-    void openExisting(final InternalProcessorContext context, final long streamTime);
+    void openExisting(final StateStoreContext context, final long streamTime);
 
-    List<S> segments(final long timeFrom, final long timeTo);
+    List<S> segments(final long timeFrom, final long timeTo, final boolean forward);
 
-    List<S> allSegments();
+    List<S> allSegments(final boolean forward);
 
-    void flush();
+    void commit(final Map<TopicPartition, Long> changelogOffsets);
+
+    @Deprecated
+    boolean managesOffsets();
+
+    Long committedOffset(final TopicPartition partition);
 
     void close();
 }

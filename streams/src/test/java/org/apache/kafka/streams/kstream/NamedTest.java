@@ -17,17 +17,18 @@
 package org.apache.kafka.streams.kstream;
 
 import org.apache.kafka.streams.errors.TopologyException;
-import org.junit.Test;
+
+import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class NamedTest {
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldThrowExceptionGivenNullName() {
-        Named.as(null);
+        assertThrows(NullPointerException.class, () -> Named.as(null));
     }
 
     @Test
@@ -37,12 +38,11 @@ public class NamedTest {
         final String[] invalidNames = {"", "foo bar", "..", "foo:bar", "foo=bar", ".", new String(longString)};
 
         for (final String name : invalidNames) {
-            try {
-                Named.validate(name);
-                fail("No exception was thrown for named with invalid name: " + name);
-            } catch (final TopologyException e) {
-                // success
-            }
+            assertThrows(
+                TopologyException.class,
+                () -> Named.validate(name),
+                "should not accept invalid name: '" + name + "'"
+            );
         }
     }
 }

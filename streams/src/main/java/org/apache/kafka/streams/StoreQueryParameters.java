@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.streams;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
 import org.apache.kafka.streams.state.QueryableStoreType;
 
 import java.util.Objects;
@@ -23,14 +24,15 @@ import java.util.Objects;
 /**
  * {@code StoreQueryParameters} allows you to pass a variety of parameters when fetching a store for interactive query.
  */
+@InterfaceAudience.Public
 public class StoreQueryParameters<T> {
 
-    private Integer partition;
-    private boolean staleStores;
+    private final Integer partition;
+    private final boolean staleStores;
     private final String storeName;
     private final QueryableStoreType<T> queryableStoreType;
 
-    private StoreQueryParameters(final String storeName, final QueryableStoreType<T>  queryableStoreType, final Integer partition, final boolean staleStores) {
+    protected StoreQueryParameters(final String storeName, final QueryableStoreType<T>  queryableStoreType, final Integer partition, final boolean staleStores) {
         this.storeName = storeName;
         this.queryableStoreType = queryableStoreType;
         this.partition = partition;
@@ -39,7 +41,7 @@ public class StoreQueryParameters<T> {
 
     public static <T> StoreQueryParameters<T> fromNameAndType(final String storeName,
                                                               final QueryableStoreType<T>  queryableStoreType) {
-        return new StoreQueryParameters<T>(storeName, queryableStoreType, null, false);
+        return new StoreQueryParameters<>(storeName, queryableStoreType, null, false);
     }
 
     /**
@@ -50,7 +52,7 @@ public class StoreQueryParameters<T> {
      * @return StoreQueryParameters a new {@code StoreQueryParameters} instance configured with the specified partition
      */
     public StoreQueryParameters<T> withPartition(final Integer partition) {
-        return new StoreQueryParameters<T>(storeName, queryableStoreType, partition, staleStores);
+        return new StoreQueryParameters<>(storeName, queryableStoreType, partition, staleStores);
     }
 
     /**
@@ -59,7 +61,7 @@ public class StoreQueryParameters<T> {
      * @return StoreQueryParameters a new {@code StoreQueryParameters} instance configured with serving from stale stores enabled
      */
     public StoreQueryParameters<T> enableStaleStores() {
-        return new StoreQueryParameters<T>(storeName, queryableStoreType, partition, true);
+        return new StoreQueryParameters<>(storeName, queryableStoreType, partition, true);
     }
 
     /**
@@ -105,7 +107,7 @@ public class StoreQueryParameters<T> {
         if (!(obj instanceof StoreQueryParameters)) {
             return false;
         }
-        final StoreQueryParameters storeQueryParameters = (StoreQueryParameters) obj;
+        final StoreQueryParameters<?> storeQueryParameters = (StoreQueryParameters<?>) obj;
         return Objects.equals(storeQueryParameters.partition, partition)
                 && Objects.equals(storeQueryParameters.staleStores, staleStores)
                 && Objects.equals(storeQueryParameters.storeName, storeName)

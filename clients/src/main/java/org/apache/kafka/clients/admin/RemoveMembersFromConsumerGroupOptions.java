@@ -14,9 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.kafka.clients.admin;
 
-import org.apache.kafka.common.annotation.InterfaceStability;
+import org.apache.kafka.common.annotation.InterfaceAudience;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -26,13 +27,12 @@ import java.util.Set;
 /**
  * Options for {@link AdminClient#removeMembersFromConsumerGroup(String, RemoveMembersFromConsumerGroupOptions)}.
  * It carries the members to be removed from the consumer group.
- *
- * The API of this class is evolving, see {@link AdminClient} for details.
  */
-@InterfaceStability.Evolving
+@InterfaceAudience.Public
 public class RemoveMembersFromConsumerGroupOptions extends AbstractOptions<RemoveMembersFromConsumerGroupOptions> {
 
-    private Set<MemberToRemove> members;
+    private final Set<MemberToRemove> members;
+    private String reason;
 
     public RemoveMembersFromConsumerGroupOptions(Collection<MemberToRemove> members) {
         if (members.isEmpty()) {
@@ -45,8 +45,19 @@ public class RemoveMembersFromConsumerGroupOptions extends AbstractOptions<Remov
         this.members = Collections.emptySet();
     }
 
+    /**
+     * Sets an optional reason.
+     */
+    public void reason(final String reason) {
+        this.reason = reason;
+    }
+
     public Set<MemberToRemove> members() {
         return members;
+    }
+
+    public String reason() {
+        return reason;
     }
 
     public boolean removeAll() {

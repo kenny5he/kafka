@@ -17,16 +17,22 @@
 package org.apache.kafka.streams.state.internals;
 
 import org.apache.kafka.common.utils.Bytes;
-import org.apache.kafka.streams.state.KeyValueIterator;
 import org.apache.kafka.streams.state.KeyValueStore;
 
 import java.io.IOException;
 
-public interface Segment extends KeyValueStore<Bytes, byte[]>, BatchWritingStore {
+public interface Segment extends KeyValueStore<Bytes, byte[]>, BatchWritingStore, Comparable<Segment> {
+
+    long id();
 
     void destroy() throws IOException;
 
-    KeyValueIterator<Bytes, byte[]> all();
+    void deleteRange(Bytes keyFrom, Bytes keyTo);
 
-    KeyValueIterator<Bytes, byte[]> range(final Bytes from, final Bytes to);
+    void writePosition();
+
+    @Override
+    default int compareTo(final Segment segment) {
+        return Long.compare(id(), segment.id());
+    }
 }

@@ -16,42 +16,47 @@
  */
 package org.apache.kafka.common.requests;
 
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.errors.InvalidRequestException;
 import org.apache.kafka.common.errors.UnsupportedVersionException;
 import org.apache.kafka.common.message.RequestHeaderData;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.ByteBufferAccessor;
-import org.apache.kafka.common.protocol.types.Struct;
+import org.apache.kafka.common.protocol.ObjectSerializationCache;
 
 import java.nio.ByteBuffer;
+import java.util.Objects;
 
 /**
  * The header for a request in the Kafka protocol
  */
 public class RequestHeader implements AbstractRequestResponse {
+    private static final int SIZE_NOT_INITIALIZED = -1;
     private final RequestHeaderData data;
     private final short headerVersion;
-
-    public RequestHeader(Struct struct, short headerVersion) {
-        this(new RequestHeaderData(struct, headerVersion), headerVersion);
-    }
+    private int size = SIZE_NOT_INITIALIZED;
 
     public RequestHeader(ApiKeys requestApiKey, short requestVersion, String clientId, int correlationId) {
-        this(new RequestHeaderData().
+        this(requestApiKey, requestVersion, clientId, null, correlationId);
+    }
+
+    public RequestHeader(ApiKeys requestApiKey, short requestVersion, String clientId, Uuid clientInstanceId,
+                         int correlationId) {
+        this.headerVersion = requestApiKey.requestHeaderVersion(requestVersion);
+        this.data = new RequestHeaderData().
                 setRequestApiKey(requestApiKey.id).
                 setRequestApiVersion(requestVersion).
                 setClientId(clientId).
-                setCorrelationId(correlationId),
-            ApiKeys.forId(requestApiKey.id).requestHeaderVersion(requestVersion));
+                setCorrelationId(correlationId);
+        // The client instance ID is a tagged field from header version 3, so writing it at an older version fails.
+        // We only set it from header version 3. Otherwise, the header leaves the ID unset as its default, `Uuid.ZERO_UUID`.
+        if (clientInstanceId != null && headerVersion >= 3)
+            this.data.setClientInstanceId(clientInstanceId);
     }
 
     public RequestHeader(RequestHeaderData data, short headerVersion) {
         this.data = data;
         this.headerVersion = headerVersion;
-    }
-
-    public Struct toStruct() {
-        return this.data.toStruct(headerVersion);
     }
 
     public ApiKeys apiKey() {
@@ -74,29 +79,101 @@ public class RequestHeader implements AbstractRequestResponse {
         return data.correlationId();
     }
 
+    /**
+     * Returns {@link Uuid#ZERO_UUID} if the header predates v3 or the client sent no ID.
+     */
+    public Uuid clientInstanceId() {
+        return data.clientInstanceId();
+    }
+
     public RequestHeaderData data() {
         return data;
     }
 
+    // Visible for testing.
+    void write(ByteBuffer buffer, ObjectSerializationCache serializationCache) {
+        data.write(new ByteBufferAccessor(buffer), serializationCache, headerVersion);
+    }
+
+    /**
+     * Calculates the size of {@link RequestHeader} in bytes.
+     *
+     * This method to calculate size should be only when it is immediately followed by
+     * {@link #write(ByteBuffer, ObjectSerializationCache)} method call. In such cases, ObjectSerializationCache
+     * helps to avoid the serialization twice. In all other cases, {@link #size()} should be preferred instead.
+     *
+     * Calls to this method leads to calculation of size every time it is invoked. {@link #size()} should be preferred
+     * instead.
+     *
+     * Visible for testing.
+     */
+    int size(ObjectSerializationCache serializationCache) {
+        this.size = data.size(serializationCache, headerVersion);
+        return size;
+    }
+
+    /**
+     * Returns the size of {@link RequestHeader} in bytes.
+     *
+     * Calls to this method are idempotent and inexpensive since it returns the cached value of size after the first
+     * invocation.
+     */
+    public int size() {
+        if (this.size == SIZE_NOT_INITIALIZED) {
+            this.size = size(new ObjectSerializationCache());
+        }
+        return size;
+    }
+
+    public boolean isApiVersionSupported() {
+        return apiKey().isVersionSupported(apiVersion());
+    }
+
+    public boolean isApiVersionDeprecated() {
+        return apiKey().isVersionDeprecated(apiVersion());
+    }
+
     public ResponseHeader toResponseHeader() {
-        return new ResponseHeader(data.correlationId(),
-            apiKey().responseHeaderVersion(apiVersion()));
+        return new ResponseHeader(data.correlationId(), apiKey().responseHeaderVersion(apiVersion()));
     }
 
     public static RequestHeader parse(ByteBuffer buffer) {
-        short apiKey = -1;
+        short apiKeyId = -1;
         try {
-            apiKey = buffer.getShort();
+            // We derive the header version from the request api version, so we read that first.
+            // The request api version is part of `RequestHeaderData`, so we reset the buffer position after the read.
+            int bufferStartPositionForHeader = buffer.position();
+            apiKeyId = buffer.getShort();
             short apiVersion = buffer.getShort();
-            short headerVersion = ApiKeys.forId(apiKey).requestHeaderVersion(apiVersion);
-            buffer.rewind();
-            return new RequestHeader(new RequestHeaderData(
-                new ByteBufferAccessor(buffer), headerVersion), headerVersion);
+            ApiKeys apiKey = ApiKeys.forId(apiKeyId);
+
+            // `apiKey.requestHeaderVersion` will fail if there are no valid versions - we do this check first in order to
+            // provide a more helpful message
+            if (!apiKey.hasValidVersion())
+                throw new InvalidRequestException("Unsupported api with key " + apiKeyId + " (" + apiKey.name + ") and version " + apiVersion);
+
+            short headerVersion = apiKey.requestHeaderVersion(apiVersion);
+            buffer.position(bufferStartPositionForHeader);
+            final RequestHeaderData headerData = new RequestHeaderData(new ByteBufferAccessor(buffer), headerVersion);
+            // Due to a quirk in the protocol, client ID is marked as nullable.
+            // However, we treat a null client ID as equivalent to an empty client ID.
+            if (headerData.clientId() == null) {
+                headerData.setClientId("");
+            }
+            final RequestHeader header = new RequestHeader(headerData, headerVersion);
+            // Size of header is calculated by the shift in the position of buffer's start position during parsing.
+            // Prior to parsing, the buffer's start position points to header data and after the parsing operation
+            // the buffer's start position points to api message. For more information on how the buffer is
+            // constructed, see RequestUtils#serialize()
+            header.size = Math.max(buffer.position() - bufferStartPositionForHeader, 0);
+            return header;
         } catch (UnsupportedVersionException e) {
-            throw new InvalidRequestException("Unknown API key " + apiKey, e);
+            throw new InvalidRequestException("Unknown API key " + apiKeyId, e);
+        } catch (InvalidRequestException e) {
+            throw e;
         } catch (Throwable ex) {
-            throw new InvalidRequestException("Error parsing request header. Our best guess of the apiKey is: " +
-                    apiKey, ex);
+            throw new InvalidRequestException("Error parsing request header. Our best guess of the apiKeyId is: " +
+                    apiKeyId, ex);
         }
     }
 
@@ -105,7 +182,9 @@ public class RequestHeader implements AbstractRequestResponse {
         return "RequestHeader(apiKey=" + apiKey() +
                 ", apiVersion=" + apiVersion() +
                 ", clientId=" + clientId() +
+                ", clientInstanceId=" + clientInstanceId() +
                 ", correlationId=" + correlationId() +
+                ", headerVersion=" + headerVersion +
                 ")";
     }
 
@@ -114,11 +193,12 @@ public class RequestHeader implements AbstractRequestResponse {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         RequestHeader that = (RequestHeader) o;
-        return this.data.equals(that.data);
+        return headerVersion == that.headerVersion &&
+            Objects.equals(data, that.data);
     }
 
     @Override
     public int hashCode() {
-        return this.data.hashCode();
+        return Objects.hash(data, headerVersion);
     }
 }

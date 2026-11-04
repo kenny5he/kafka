@@ -16,13 +16,15 @@
  */
 package org.apache.kafka.common.metrics.stats;
 
-import java.util.List;
-
+import org.apache.kafka.common.annotation.InterfaceAudience;
 import org.apache.kafka.common.metrics.MetricConfig;
+
+import java.util.List;
 
 /**
  * A {@link SampledStat} that gives the min over its samples.
  */
+@InterfaceAudience.Public
 public class Min extends SampledStat {
 
     public Min() {

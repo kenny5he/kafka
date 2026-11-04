@@ -16,25 +16,36 @@
  */
 package org.apache.kafka.streams.state.internals;
 
+import org.apache.kafka.common.IsolationLevel;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.kstream.Windowed;
-import org.apache.kafka.streams.processor.ProcessorContext;
 import org.apache.kafka.streams.processor.StateStore;
+import org.apache.kafka.streams.processor.StateStoreContext;
+import org.apache.kafka.streams.query.Position;
+import org.apache.kafka.streams.query.PositionBound;
+import org.apache.kafka.streams.query.Query;
+import org.apache.kafka.streams.query.QueryConfig;
+import org.apache.kafka.streams.query.QueryResult;
 import org.apache.kafka.streams.state.KeyValueIterator;
+import org.apache.kafka.streams.state.ReadOnlyWindowStore;
 import org.apache.kafka.streams.state.WindowStore;
 import org.apache.kafka.streams.state.WindowStoreIterator;
 
+import java.time.Instant;
+import java.util.Objects;
+
 public class RocksDBWindowStore
-    extends WrappedStateStore<SegmentedBytesStore, Object, Object>
+    extends WrappedStateStore<AbstractRocksDBSegmentedBytesStore<?>, Object, Object>
     implements WindowStore<Bytes, byte[]> {
 
     private final boolean retainDuplicates;
     private final long windowSize;
 
-    private ProcessorContext context;
     private int seqnum = 0;
 
-    RocksDBWindowStore(final SegmentedBytesStore bytesStore,
+    private StateStoreContext stateStoreContext;
+
+    RocksDBWindowStore(final AbstractRocksDBSegmentedBytesStore<?> bytesStore,
                        final boolean retainDuplicates,
                        final long windowSize) {
         super(bytesStore);
@@ -43,15 +54,9 @@ public class RocksDBWindowStore
     }
 
     @Override
-    public void init(final ProcessorContext context, final StateStore root) {
-        this.context = context;
-        super.init(context, root);
-    }
-
-    @Deprecated
-    @Override
-    public void put(final Bytes key, final byte[] value) {
-        put(key, value, context.timestamp());
+    public void init(final StateStoreContext stateStoreContext, final StateStore root) {
+        wrapped().init(stateStoreContext, root);
+        this.stateStoreContext = stateStoreContext;
     }
 
     @Override
@@ -65,38 +70,143 @@ public class RocksDBWindowStore
 
     @Override
     public byte[] fetch(final Bytes key, final long timestamp) {
-        final byte[] bytesValue = wrapped().get(WindowKeySchema.toStoreKeyBinary(key, timestamp, seqnum));
-        return bytesValue;
+        return wrapped().get(WindowKeySchema.toStoreKeyBinary(key, timestamp, seqnum));
     }
 
-    @SuppressWarnings("deprecation") // note, this method must be kept if super#fetch(...) is removed
     @Override
     public WindowStoreIterator<byte[]> fetch(final Bytes key, final long timeFrom, final long timeTo) {
-        final KeyValueIterator<Bytes, byte[]> bytesIterator = wrapped().fetch(key, timeFrom, timeTo);
-        return new WindowStoreIteratorWrapper(bytesIterator, windowSize).valuesIterator();
+        return valuesIterator(wrapped().fetch(key, timeFrom, timeTo));
     }
 
-    @SuppressWarnings("deprecation") // note, this method must be kept if super#fetch(...) is removed
     @Override
-    public KeyValueIterator<Windowed<Bytes>, byte[]> fetch(final Bytes from,
-                                                           final Bytes to,
+    public WindowStoreIterator<byte[]> backwardFetch(final Bytes key, final long timeFrom, final long timeTo) {
+        return valuesIterator(wrapped().backwardFetch(key, timeFrom, timeTo));
+    }
+
+    @Override
+    public KeyValueIterator<Windowed<Bytes>, byte[]> fetch(final Bytes keyFrom,
+                                                           final Bytes keyTo,
                                                            final long timeFrom,
                                                            final long timeTo) {
-        final KeyValueIterator<Bytes, byte[]> bytesIterator = wrapped().fetch(from, to, timeFrom, timeTo);
-        return new WindowStoreIteratorWrapper(bytesIterator, windowSize).keyValueIterator();
+        return keyValueIterator(wrapped().fetch(keyFrom, keyTo, timeFrom, timeTo));
+    }
+
+    @Override
+    public KeyValueIterator<Windowed<Bytes>, byte[]> backwardFetch(final Bytes keyFrom,
+                                                                   final Bytes keyTo,
+                                                                   final long timeFrom,
+                                                                   final long timeTo) {
+        return keyValueIterator(wrapped().backwardFetch(keyFrom, keyTo, timeFrom, timeTo));
     }
 
     @Override
     public KeyValueIterator<Windowed<Bytes>, byte[]> all() {
-        final KeyValueIterator<Bytes, byte[]> bytesIterator = wrapped().all();
+        return keyValueIterator(wrapped().all());
+    }
+
+    @Override
+    public KeyValueIterator<Windowed<Bytes>, byte[]> backwardAll() {
+        return keyValueIterator(wrapped().backwardAll());
+    }
+
+    @Override
+    public KeyValueIterator<Windowed<Bytes>, byte[]> fetchAll(final long timeFrom, final long timeTo) {
+        return keyValueIterator(wrapped().fetchAll(timeFrom, timeTo));
+    }
+
+    @Override
+    public KeyValueIterator<Windowed<Bytes>, byte[]> backwardFetchAll(final long timeFrom, final long timeTo) {
+        return keyValueIterator(wrapped().backwardFetchAll(timeFrom, timeTo));
+    }
+
+    // Shared by the live methods above and the ReadOnlyView below; only the iterator's source differs.
+    private WindowStoreIterator<byte[]> valuesIterator(final KeyValueIterator<Bytes, byte[]> bytesIterator) {
+        return new WindowStoreIteratorWrapper(bytesIterator, windowSize).valuesIterator();
+    }
+
+    private KeyValueIterator<Windowed<Bytes>, byte[]> keyValueIterator(final KeyValueIterator<Bytes, byte[]> bytesIterator) {
         return new WindowStoreIteratorWrapper(bytesIterator, windowSize).keyValueIterator();
     }
 
-    @SuppressWarnings("deprecation") // note, this method must be kept if super#fetchAll(...) is removed
     @Override
-    public KeyValueIterator<Windowed<Bytes>, byte[]> fetchAll(final long timeFrom, final long timeTo) {
-        final KeyValueIterator<Bytes, byte[]> bytesIterator = wrapped().fetchAll(timeFrom, timeTo);
-        return new WindowStoreIteratorWrapper(bytesIterator, windowSize).keyValueIterator();
+    public ReadOnlyWindowStore<Bytes, byte[]> readOnly(final IsolationLevel isolationLevel) {
+        Objects.requireNonNull(isolationLevel, "isolationLevel cannot be null");
+        return new ReadOnlyView(isolationLevel);
+    }
+
+    /** Read view; reads go through the segmented store's isolation view, so READ_COMMITTED hides staged writes. */
+    private final class ReadOnlyView implements ReadOnlyWindowStore<Bytes, byte[]> {
+
+        private final AbstractRocksDBSegmentedBytesStore.ReadOnlyView segmented;
+
+        ReadOnlyView(final IsolationLevel isolationLevel) {
+            this.segmented = wrapped().readOnly(isolationLevel);
+        }
+
+        @Override
+        public byte[] fetch(final Bytes key, final long time) {
+            return segmented.get(WindowKeySchema.toStoreKeyBinary(key, time, seqnum));
+        }
+
+        @Override
+        public WindowStoreIterator<byte[]> fetch(final Bytes key, final Instant timeFrom, final Instant timeTo) {
+            return valuesIterator(segmented.fetch(key, timeFrom.toEpochMilli(), timeTo.toEpochMilli()));
+        }
+
+        @Override
+        public WindowStoreIterator<byte[]> backwardFetch(final Bytes key, final Instant timeFrom, final Instant timeTo) {
+            return valuesIterator(segmented.backwardFetch(key, timeFrom.toEpochMilli(), timeTo.toEpochMilli()));
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<Bytes>, byte[]> fetch(final Bytes keyFrom, final Bytes keyTo,
+                                                               final Instant timeFrom, final Instant timeTo) {
+            return keyValueIterator(segmented.fetch(keyFrom, keyTo, timeFrom.toEpochMilli(), timeTo.toEpochMilli()));
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<Bytes>, byte[]> backwardFetch(final Bytes keyFrom, final Bytes keyTo,
+                                                                       final Instant timeFrom, final Instant timeTo) {
+            return keyValueIterator(segmented.backwardFetch(keyFrom, keyTo, timeFrom.toEpochMilli(), timeTo.toEpochMilli()));
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<Bytes>, byte[]> fetchAll(final Instant timeFrom, final Instant timeTo) {
+            return keyValueIterator(segmented.fetchAll(timeFrom.toEpochMilli(), timeTo.toEpochMilli()));
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<Bytes>, byte[]> backwardFetchAll(final Instant timeFrom, final Instant timeTo) {
+            return keyValueIterator(segmented.backwardFetchAll(timeFrom.toEpochMilli(), timeTo.toEpochMilli()));
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<Bytes>, byte[]> all() {
+            return keyValueIterator(segmented.all());
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<Bytes>, byte[]> backwardAll() {
+            return keyValueIterator(segmented.backwardAll());
+        }
+    }
+
+    @Override
+    public <R> QueryResult<R> query(final Query<R> query,
+                                    final PositionBound positionBound,
+                                    final QueryConfig config) {
+
+        final Position queryPosition = config.getIsolationLevel() == IsolationLevel.READ_COMMITTED
+            ? wrapped().getCommittedPosition()
+            : getPosition();
+        return StoreQueryUtils.handleBasicQueries(
+            query,
+            positionBound,
+            config,
+            this,
+            queryPosition,
+            stateStoreContext
+        );
     }
 
     private void maybeUpdateSeqnumForDups() {

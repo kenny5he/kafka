@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.common.config;
 
+import org.apache.kafka.common.annotation.InterfaceAudience;
 import org.apache.kafka.common.config.provider.ConfigProvider;
 import org.apache.kafka.common.config.provider.FileConfigProvider;
 
@@ -52,6 +53,7 @@ import java.util.regex.Pattern;
  * in a {@link ConfigProvider}, such as the {@link ConfigProvider#subscribe(String, Set, ConfigChangeCallback)} and
  * {@link ConfigProvider#unsubscribe(String, Set, ConfigChangeCallback)} methods.
  */
+@InterfaceAudience.Public
 public class ConfigTransformer {
     public static final Pattern DEFAULT_PATTERN = Pattern.compile("\\$\\{([^}]*?):(([^}]*?):)?([^}]*?)\\}");
     private static final String EMPTY_PATH = "";
@@ -81,11 +83,11 @@ public class ConfigTransformer {
         // Collect the variables from the given configs that need transformation
         for (Map.Entry<String, String> config : configs.entrySet()) {
             if (config.getValue() != null) {
-                List<ConfigVariable> vars = getVars(config.getValue(), DEFAULT_PATTERN);
-                for (ConfigVariable var : vars) {
-                    Map<String, Set<String>> keysByPath = keysByProvider.computeIfAbsent(var.providerName, k -> new HashMap<>());
-                    Set<String> keys = keysByPath.computeIfAbsent(var.path, k -> new HashSet<>());
-                    keys.add(var.variable);
+                List<ConfigVariable> configVars = getVars(config.getValue(), DEFAULT_PATTERN);
+                for (ConfigVariable configVar : configVars) {
+                    Map<String, Set<String>> keysByPath = keysByProvider.computeIfAbsent(configVar.providerName, k -> new HashMap<>());
+                    Set<String> keys = keysByPath.computeIfAbsent(configVar.path, k -> new HashSet<>());
+                    keys.add(configVar.variable);
                 }
             }
         }
